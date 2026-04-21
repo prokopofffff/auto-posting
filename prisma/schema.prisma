@@ -1,0 +1,233 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================================
+// Auth (Auth.js-compatible tables + password for Credentials provider)
+// =====================================================================
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  emailVerified  DateTime?
+  name           String?
+  image          String?
+  hashedPassword String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  organizations OrganizationMember[]
+  ownedOrgs     Organization[]       @relation("OrgOwner")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// =====================================================================
+// SaaS tenancy
+// =====================================================================
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  ownerId   String
+  plan      Plan     @default(FREE)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner    User                 @relation("OrgOwner", fields: [ownerId], references: [id])
+  members  OrganizationMember[]
+  projects Project[]
+}
+
+model OrganizationMember {
+  id     String   @id @default(cuid())
+  orgId  String
+  userId String
+  role   OrgRole  @default(MEMBER)
+  joined DateTime @default(now())
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum Plan {
+  FREE
+  PRO
+  TEAM
+}
+
+// =====================================================================
+// Project = one bot/agent with its own settings, news sources, schedule
+// =====================================================================
+
+model Project {
+  id        String   @id @default(cuid())
+  orgId     String
+  name      String
+  status    ProjectStatus @default(PAUSED)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org               Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  settings          ProjectSettings?
+  connectedAccounts ConnectedAccount[]
+  drafts            Draft[]
+  posts             Post[]
+}
+
+enum ProjectStatus {
+  ACTIVE
+  PAUSED
+}
+
+model ProjectSettings {
+  id              String   @id @default(cuid())
+  projectId       String   @unique
+  topics          String[] // mix of template ids + custom strings
+  languages       String[] // e.g. ["en", "ru"]
+  writingStyle    String   @default("professional") // professional | casual | technical | provocative | custom
+  customStyle     String?  @db.Text
+  scheduleCron    String?  // optional raw cron
+  intervalDays    Int      @default(1) // 1 = daily, 3 = every 3 days, 7 = weekly
+  preferredHour   Int      @default(9) // 0-23 local
+  timezone        String   @default("UTC")
+  mode            PostMode @default(MANUAL) // MANUAL | AUTOPILOT
+  includeHashtags Boolean  @default(true)
+  includeSource   Boolean  @default(true)
+  maxPostChars    Int      @default(2200)
+
+  bannedWords        String[] @default([])
+  moderationEnabled  Boolean  @default(false)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+enum PostMode {
+  MANUAL
+  AUTOPILOT
+}
+
+// =====================================================================
+// Connected social accounts (OAuth tokens stored encrypted)
+// =====================================================================
+
+model ConnectedAccount {
+  id           String   @id @default(cuid())
+  projectId    String
+  platform     Platform
+  externalId   String   // LinkedIn URN / Telegram channel id
+  displayName  String?
+  accessToken  String?  @db.Text // encrypted
+  refreshToken String?  @db.Text // encrypted
+  expiresAt    DateTime?
+  meta         Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, platform, externalId])
+}
+
+enum Platform {
+  LINKEDIN
+  TELEGRAM
+}
+
+// =====================================================================
+// Draft = AI-generated post, pending review or scheduled
+// =====================================================================
+
+model Draft {
+  id          String      @id @default(cuid())
+  projectId   String
+  topic       String
+  sourceUrl   String?
+  sourceTitle String?
+  contentByLang Json      // { en: "...", ru: "..." }
+  targets     Platform[]
+  status      DraftStatus @default(PENDING)
+  scheduledAt DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  posts   Post[]
+}
+
+enum DraftStatus {
+  PENDING    // waiting for manual approval
+  APPROVED   // approved or autopilot-queued
+  SCHEDULED  // scheduled at a specific time
+  PUBLISHED
+  FAILED
+  SKIPPED
+}
+
+// =====================================================================
+// Post = actually published record
+// =====================================================================
+
+model Post {
+  id         String   @id @default(cuid())
+  projectId  String
+  draftId    String?
+  platform   Platform
+  language   String
+  content    String   @db.Text
+  externalUrl String?
+  externalId  String?
+  publishedAt DateTime @default(now())
+  error       String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  draft   Draft?  @relation(fields: [draftId], references: [id], onDelete: SetNull)
+}
