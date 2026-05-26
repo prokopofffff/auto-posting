@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { TransientPublishError, parseRetryAfter } from "@/lib/retry";
 
 const AUTHORIZE_URL = "https://www.linkedin.com/oauth/v2/authorization";
 const TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken";
@@ -38,17 +39,15 @@ export function buildAuthorizeUrl(state: string, redirectUri: string): string {
   return url.toString();
 }
 
-export async function exchangeCode(
-  code: string,
-  redirectUri: string,
+async function postTokenRequest(
+  op: string,
+  grant: Record<string, string>,
 ): Promise<LinkedInTokenResponse> {
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
   if (!clientId || !clientSecret) throw new Error("LinkedIn client credentials are not set");
   const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    code,
-    redirect_uri: redirectUri,
+    ...grant,
     client_id: clientId,
     client_secret: clientSecret,
   });
@@ -60,9 +59,29 @@ export async function exchangeCode(
   });
   if (!res.ok) {
     const txt = await res.text();
-    throw new Error(`LinkedIn token exchange failed: ${res.status} ${txt}`);
+    throw new Error(`LinkedIn token ${op} failed: ${res.status} ${txt}`);
   }
   return (await res.json()) as LinkedInTokenResponse;
+}
+
+export function exchangeCode(
+  code: string,
+  redirectUri: string,
+): Promise<LinkedInTokenResponse> {
+  return postTokenRequest("exchange", {
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: redirectUri,
+  });
+}
+
+export function refreshAccessToken(
+  refreshToken: string,
+): Promise<LinkedInTokenResponse> {
+  return postTokenRequest("refresh", {
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+  });
 }
 
 export async function fetchUserInfo(accessToken: string): Promise<LinkedInUserInfo> {
@@ -84,30 +103,41 @@ export async function createPost(
   authorUrn: string,
   text: string,
 ): Promise<LinkedInPostResult> {
-  const res = await fetch(POSTS_URL, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${accessToken}`,
-      "content-type": "application/json",
-      "LinkedIn-Version": LINKEDIN_VERSION,
-      "X-Restli-Protocol-Version": "2.0.0",
-    },
-    body: JSON.stringify({
-      author: authorUrn,
-      commentary: text,
-      visibility: "PUBLIC",
-      distribution: {
-        feedDistribution: "MAIN_FEED",
-        targetEntities: [],
-        thirdPartyDistributionChannels: [],
+  let res: Response;
+  try {
+    res = await fetch(POSTS_URL, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+        "LinkedIn-Version": LINKEDIN_VERSION,
+        "X-Restli-Protocol-Version": "2.0.0",
       },
-      lifecycleState: "PUBLISHED",
-      isReshareDisabledByAuthor: false,
-    }),
-    cache: "no-store",
-  });
+      body: JSON.stringify({
+        author: authorUrn,
+        commentary: text,
+        visibility: "PUBLIC",
+        distribution: {
+          feedDistribution: "MAIN_FEED",
+          targetEntities: [],
+          thirdPartyDistributionChannels: [],
+        },
+        lifecycleState: "PUBLISHED",
+        isReshareDisabledByAuthor: false,
+      }),
+      cache: "no-store",
+    });
+  } catch (e) {
+    throw new TransientPublishError(`LinkedIn post network error: ${(e as Error).message}`);
+  }
   if (!res.ok) {
     const txt = await res.text();
+    if (res.status === 429 || res.status >= 500) {
+      throw new TransientPublishError(`LinkedIn post failed: ${res.status} ${txt}`, {
+        status: res.status,
+        retryAfterMs: parseRetryAfter(res.headers.get("retry-after")),
+      });
+    }
     throw new Error(`LinkedIn post failed: ${res.status} ${txt}`);
   }
   const postUrn = res.headers.get("x-restli-id") ?? res.headers.get("x-linkedin-id");

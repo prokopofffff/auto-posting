@@ -3,11 +3,33 @@ import type { NewsItem } from "@/lib/news";
 
 const MODEL = "claude-opus-4-7";
 
-let _client: Anthropic | null = null;
-function client(): Anthropic {
+const OAUTH_BETA_HEADER = "oauth-2025-04-20";
+const CLAUDE_CODE_PREAMBLE =
+  "You are Claude Code, Anthropic's official CLI for Claude.";
+
+type ClientMode = { client: Anthropic; oauth: boolean };
+
+let _client: ClientMode | null = null;
+function client(): ClientMode {
   if (!_client) {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set");
-    _client = new Anthropic();
+    const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (oauthToken) {
+      _client = {
+        client: new Anthropic({
+          authToken: oauthToken,
+          apiKey: null,
+          defaultHeaders: { "anthropic-beta": OAUTH_BETA_HEADER },
+        }),
+        oauth: true,
+      };
+    } else if (apiKey) {
+      _client = { client: new Anthropic(), oauth: false };
+    } else {
+      throw new Error(
+        "Set CLAUDE_CODE_OAUTH_TOKEN (run `claude setup-token`) or ANTHROPIC_API_KEY",
+      );
+    }
   }
   return _client;
 }
@@ -97,17 +119,22 @@ export async function generatePost(input: GenerateInput): Promise<GeneratedPost[
     .filter(Boolean)
     .join("\n");
 
-  const response = await client().messages.create({
+  const c = client();
+  const systemBlocks: Anthropic.TextBlockParam[] = [];
+  if (c.oauth) {
+    systemBlocks.push({ type: "text", text: CLAUDE_CODE_PREAMBLE });
+  }
+  systemBlocks.push({
+    type: "text",
+    text: system,
+    cache_control: { type: "ephemeral" },
+  });
+
+  const response = await c.client.messages.create({
     model: MODEL,
     max_tokens: 2000,
     thinking: { type: "adaptive" },
-    system: [
-      {
-        type: "text",
-        text: system,
-        cache_control: { type: "ephemeral" },
-      },
-    ],
+    system: systemBlocks,
     messages: [{ role: "user", content: userMsg }],
   });
 

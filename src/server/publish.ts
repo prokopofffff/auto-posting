@@ -2,8 +2,30 @@ import { db } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { buildPostUrl, sendMessage } from "@/lib/telegram";
 import { createPost as createLinkedInPost } from "@/lib/linkedin";
+import { getValidLinkedInAccessToken } from "@/server/linkedin-tokens";
 import { moderate } from "@/lib/moderation";
-import type { ConnectedAccount } from "@prisma/client";
+import { withRetry } from "@/lib/retry";
+import type { ConnectedAccount, Platform } from "@prisma/client";
+
+function recordPublishError(input: {
+  projectId: string;
+  draftId: string;
+  platform: Platform;
+  language: string;
+  content?: string;
+  error: string;
+}) {
+  return db.post.create({
+    data: {
+      projectId: input.projectId,
+      draftId: input.draftId,
+      platform: input.platform,
+      language: input.language,
+      content: input.content ?? "",
+      error: input.error,
+    },
+  });
+}
 
 export type DraftContent = Record<string, string>; // lang -> text
 
@@ -26,9 +48,11 @@ async function publishToTelegram(
   if (!picked) return null;
   const token = decrypt(conn.accessToken);
   try {
-    const res = await sendMessage(token, conn.externalId, picked.text, {
-      disableWebPagePreview: false,
-    });
+    const res = await withRetry(() =>
+      sendMessage(token, conn.externalId, picked.text, {
+        disableWebPagePreview: false,
+      }),
+    );
     const url = buildPostUrl(res.chat, res.message_id);
     await db.post.create({
       data: {
@@ -43,15 +67,13 @@ async function publishToTelegram(
     });
     return { platform: "TELEGRAM" as const, language: picked.lang, url };
   } catch (e) {
-    await db.post.create({
-      data: {
-        projectId,
-        draftId,
-        platform: "TELEGRAM",
-        language: picked.lang,
-        content: picked.text,
-        error: (e as Error).message,
-      },
+    await recordPublishError({
+      projectId,
+      draftId,
+      platform: "TELEGRAM",
+      language: picked.lang,
+      content: picked.text,
+      error: (e as Error).message,
     });
     return null;
   }
@@ -64,24 +86,25 @@ async function publishToLinkedIn(
   content: DraftContent,
 ) {
   if (!conn.accessToken) return null;
-  if (conn.expiresAt && conn.expiresAt.getTime() < Date.now()) {
-    await db.post.create({
-      data: {
-        projectId,
-        draftId,
-        platform: "LINKEDIN",
-        language: "en",
-        content: "",
-        error: "LinkedIn token expired — reconnect the account in Settings.",
-      },
+  const picked = pickContent(content);
+  if (!picked) return null;
+  let token: string;
+  try {
+    token = await getValidLinkedInAccessToken(conn);
+  } catch (e) {
+    await recordPublishError({
+      projectId,
+      draftId,
+      platform: "LINKEDIN",
+      language: picked.lang,
+      error: (e as Error).message,
     });
     return null;
   }
-  const picked = pickContent(content);
-  if (!picked) return null;
-  const token = decrypt(conn.accessToken);
   try {
-    const res = await createLinkedInPost(token, conn.externalId, picked.text);
+    const res = await withRetry(() =>
+      createLinkedInPost(token, conn.externalId, picked.text),
+    );
     await db.post.create({
       data: {
         projectId,
@@ -95,15 +118,13 @@ async function publishToLinkedIn(
     });
     return { platform: "LINKEDIN" as const, language: picked.lang, url: res.url };
   } catch (e) {
-    await db.post.create({
-      data: {
-        projectId,
-        draftId,
-        platform: "LINKEDIN",
-        language: picked.lang,
-        content: picked.text,
-        error: (e as Error).message,
-      },
+    await recordPublishError({
+      projectId,
+      draftId,
+      platform: "LINKEDIN",
+      language: picked.lang,
+      content: picked.text,
+      error: (e as Error).message,
     });
     return null;
   }
@@ -132,15 +153,12 @@ export async function publishDraft(draftId: string): Promise<
       moderationEnabled: settings.moderationEnabled,
     });
     if (!mod.allowed) {
-      await db.post.create({
-        data: {
-          projectId: draft.projectId,
-          draftId: draft.id,
-          platform: draft.targets[0] ?? "TELEGRAM",
-          language: Object.keys(content)[0] ?? "en",
-          content: "",
-          error: `Blocked by safety check: ${mod.reason}`,
-        },
+      await recordPublishError({
+        projectId: draft.projectId,
+        draftId: draft.id,
+        platform: draft.targets[0] ?? "TELEGRAM",
+        language: Object.keys(content)[0] ?? "en",
+        error: `Blocked by safety check: ${mod.reason}`,
       });
       await db.draft.update({ where: { id: draft.id }, data: { status: "FAILED" } });
       return { ok: false, error: `Blocked by safety check: ${mod.reason}` };
