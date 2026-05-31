@@ -2,25 +2,50 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/server/project";
+
+const voiceCfgSchema = z.object({
+  writingStyle: z.enum([
+    "professional",
+    "casual",
+    "technical",
+    "provocative",
+    "custom",
+  ]),
+  customStyle: z.string().max(2000).nullable().optional(),
+  includeHashtags: z.coerce.boolean(),
+  includeSource: z.coerce.boolean(),
+  maxPostChars: z.coerce.number().int().min(200).max(4096),
+});
 
 const settingsSchema = z.object({
   projectId: z.string().min(1),
   projectName: z.string().min(1).max(80),
-  topics: z.array(z.string().min(1).max(50)).min(1).max(20),
+  topics: z.array(z.string().min(1).max(80)).min(1).max(100),
   languages: z.array(z.enum(["en", "ru"])).min(1),
   writingStyle: z.enum(["professional", "casual", "technical", "provocative", "custom"]),
   customStyle: z.string().max(2000).optional().or(z.literal("")),
   intervalDays: z.coerce.number().int().min(1).max(90),
   preferredHour: z.coerce.number().int().min(0).max(23),
   timezone: z.string().min(1).max(80),
-  mode: z.enum(["MANUAL", "AUTOPILOT"]),
+  mode: z.enum(["MANUAL", "AUTOPILOT", "HYBRID"]),
   includeHashtags: z.coerce.boolean(),
   includeSource: z.coerce.boolean(),
   maxPostChars: z.coerce.number().int().min(200).max(3000),
   bannedWords: z.array(z.string().min(1).max(80)).max(200),
   moderationEnabled: z.coerce.boolean(),
+  confidenceThreshold: z.coerce.number().int().min(0).max(100).default(80),
+  skipDays: z.array(z.coerce.number().int().min(0).max(6)).default([]),
+  voiceMode: z.enum(["UNIFIED", "PER_PLATFORM"]).default("UNIFIED"),
+  voiceOverrides: z
+    .object({
+      LINKEDIN: voiceCfgSchema.optional(),
+      TELEGRAM: voiceCfgSchema.optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export type SaveSettingsInput = z.input<typeof settingsSchema>;
@@ -65,6 +90,12 @@ export async function saveSettingsAction(input: SaveSettingsInput) {
         maxPostChars: data.maxPostChars,
         bannedWords: data.bannedWords,
         moderationEnabled: data.moderationEnabled,
+        confidenceThreshold: data.confidenceThreshold,
+        skipDays: data.skipDays,
+        voiceMode: data.voiceMode,
+        voiceOverrides: data.voiceOverrides
+          ? (data.voiceOverrides as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
       },
       update: {
         topics: data.topics,
@@ -80,6 +111,12 @@ export async function saveSettingsAction(input: SaveSettingsInput) {
         maxPostChars: data.maxPostChars,
         bannedWords: data.bannedWords,
         moderationEnabled: data.moderationEnabled,
+        confidenceThreshold: data.confidenceThreshold,
+        skipDays: data.skipDays,
+        voiceMode: data.voiceMode,
+        voiceOverrides: data.voiceOverrides
+          ? (data.voiceOverrides as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
       },
     }),
   ]);

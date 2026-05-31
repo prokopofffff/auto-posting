@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { runPipelineForAllDue } from "@/server/pipeline";
+import { publishDueScheduledDrafts, runPipelineForAllDue } from "@/server/pipeline";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 min — plenty for fan-out
@@ -20,8 +20,17 @@ export async function GET(req: Request) {
   }
   const started = Date.now();
   try {
-    const result = await runPipelineForAllDue();
-    return NextResponse.json({ ok: true, ...result, ms: Date.now() - started });
+    const [pipeline, scheduled] = await Promise.all([
+      runPipelineForAllDue(),
+      publishDueScheduledDrafts(),
+    ]);
+    return NextResponse.json({
+      ok: true,
+      ...pipeline,
+      scheduledPublished: scheduled.published,
+      scheduledErrors: scheduled.errors,
+      ms: Date.now() - started,
+    });
   } catch (e) {
     return NextResponse.json(
       { ok: false, error: (e as Error).message },

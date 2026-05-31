@@ -38,11 +38,18 @@ function parseTzOffsetMinutes(timezone: string, at: Date): number {
   }
 }
 
+// Mon=0..Sun=6
+function dayIndexOf(d: Date): number {
+  const js = d.getUTCDay();
+  return js === 0 ? 6 : js - 1;
+}
+
 function nextRunForHour(
   baseline: Date,
   intervalDays: number,
   preferredHour: number,
   timezone: string,
+  skipDays: number[] = [],
 ): Date {
   const offsetMin = parseTzOffsetMinutes(timezone, baseline);
   const localMs = baseline.getTime() + offsetMin * 60_000;
@@ -50,6 +57,13 @@ function nextRunForHour(
   local.setUTCHours(preferredHour, 0, 0, 0);
   if (local.getTime() <= localMs) {
     local.setUTCDate(local.getUTCDate() + intervalDays);
+  }
+  // Step forward day-by-day while landing on a skipped day, up to 14 days defensively.
+  const skip = new Set(skipDays);
+  let guard = 0;
+  while (skip.has(dayIndexOf(local)) && guard < 14) {
+    local.setUTCDate(local.getUTCDate() + 1);
+    guard += 1;
   }
   const utcCandidate = new Date(local.getTime() - offsetMin * 60_000);
   return utcCandidate;
@@ -68,13 +82,19 @@ export async function computeScheduleInfo(projectId: string): Promise<ScheduleIn
     select: { publishedAt: true },
   });
 
-  const { intervalDays, preferredHour, timezone } = project.settings;
+  const { intervalDays, preferredHour, timezone, skipDays } = project.settings;
   const lastAt = lastPost?.publishedAt ?? null;
   const baseline = lastAt
     ? new Date(lastAt.getTime() + intervalDays * 86_400_000 - 86_400_000)
     : new Date();
 
-  const nextAt = nextRunForHour(baseline, intervalDays, preferredHour, timezone);
+  const nextAt = nextRunForHour(
+    baseline,
+    intervalDays,
+    preferredHour,
+    timezone,
+    skipDays ?? [],
+  );
   return {
     lastAt,
     nextAt,

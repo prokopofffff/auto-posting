@@ -5,9 +5,21 @@ export type AnalyticsSummary = {
   totalFailed: number;
   published7d: number;
   published30d: number;
+  publishedPrev30d: number;
   byPlatform: Array<{ platform: "TELEGRAM" | "LINKEDIN"; published: number; failed: number }>;
   byTopic: Array<{ topic: string; count: number }>;
   dailyCounts: Array<{ day: string; published: number; failed: number }>;
+  hourBuckets: number[]; // 24 entries — total posts per hour (UTC) over the window
+  recentFailures: Array<{
+    when: string;
+    topic: string;
+    platform: "LINKEDIN" | "TELEGRAM";
+    reason: string;
+  }>;
+  spend30dUsd: number;
+  tokensIn30d: number;
+  tokensOut30d: number;
+  spendPerPostUsd: number | null;
 };
 
 function dayKey(d: Date): string {
@@ -18,16 +30,41 @@ export async function getAnalytics(projectId: string): Promise<AnalyticsSummary>
   const now = Date.now();
   const from30 = new Date(now - 30 * 86_400_000);
   const from7 = new Date(now - 7 * 86_400_000);
+  const from60 = new Date(now - 60 * 86_400_000);
 
-  const posts = await db.post.findMany({
-    where: { projectId, publishedAt: { gte: from30 } },
-    select: {
-      platform: true,
-      error: true,
-      publishedAt: true,
-      draft: { select: { topic: true } },
-    },
-  });
+  const [posts, prevPosts, failureRows, spendAgg] = await Promise.all([
+    db.post.findMany({
+      where: { projectId, publishedAt: { gte: from30 } },
+      select: {
+        platform: true,
+        error: true,
+        publishedAt: true,
+        draft: { select: { topic: true } },
+      },
+    }),
+    db.post.count({
+      where: {
+        projectId,
+        error: null,
+        publishedAt: { gte: from60, lt: from30 },
+      },
+    }),
+    db.post.findMany({
+      where: { projectId, error: { not: null }, publishedAt: { gte: from30 } },
+      orderBy: { publishedAt: "desc" },
+      take: 6,
+      select: {
+        platform: true,
+        error: true,
+        publishedAt: true,
+        draft: { select: { topic: true } },
+      },
+    }),
+    db.draft.aggregate({
+      where: { projectId, createdAt: { gte: from30 } },
+      _sum: { costUsd: true, tokensInput: true, tokensOutput: true },
+    }),
+  ]);
 
   const totalPublished = await db.post.count({
     where: { projectId, error: null },
@@ -78,13 +115,40 @@ export async function getAnalytics(projectId: string): Promise<AnalyticsSummary>
     ([day, v]) => ({ day, published: v.published, failed: v.failed }),
   );
 
+  const hourBuckets = Array(24).fill(0) as number[];
+  for (const p of posts) {
+    if (p.error) continue;
+    const h = p.publishedAt.getUTCHours();
+    hourBuckets[h] += 1;
+  }
+
+  const recentFailures: AnalyticsSummary["recentFailures"] = failureRows.map((p) => ({
+    when: p.publishedAt.toISOString(),
+    topic: p.draft?.topic ?? "—",
+    platform: p.platform as "LINKEDIN" | "TELEGRAM",
+    reason: p.error ?? "unknown",
+  }));
+
+  const spend30dUsd = spendAgg._sum.costUsd ?? 0;
+  const tokensIn30d = spendAgg._sum.tokensInput ?? 0;
+  const tokensOut30d = spendAgg._sum.tokensOutput ?? 0;
+  const spendPerPostUsd =
+    published30d > 0 ? spend30dUsd / published30d : null;
+
   return {
     totalPublished,
     totalFailed,
     published7d,
     published30d,
+    publishedPrev30d: prevPosts,
     byPlatform,
     byTopic,
     dailyCounts,
+    hourBuckets,
+    recentFailures,
+    spend30dUsd,
+    tokensIn30d,
+    tokensOut30d,
+    spendPerPostUsd,
   };
 }
