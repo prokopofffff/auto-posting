@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/server/project";
 import { publishDraft } from "@/server/publish";
@@ -39,7 +40,11 @@ export async function updateDraftContentAction(
 ) {
   const owned = await assertDraftOwnership(draftId);
   if (!owned.ok) return owned;
-  await db.draft.update({ where: { id: draftId }, data: { contentByLang } });
+  // User edits become authoritative — clear per-platform overrides so publish uses the edited text.
+  await db.draft.update({
+    where: { id: draftId },
+    data: { contentByLang, contentByPlatform: Prisma.JsonNull },
+  });
   revalidatePath("/drafts");
   return { ok: true as const };
 }

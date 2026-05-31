@@ -139,7 +139,7 @@ model ProjectSettings {
   intervalDays    Int      @default(1) // 1 = daily, 3 = every 3 days, 7 = weekly
   preferredHour   Int      @default(9) // 0-23 local
   timezone        String   @default("UTC")
-  mode            PostMode @default(MANUAL) // MANUAL | AUTOPILOT
+  mode            PostMode @default(MANUAL) // MANUAL | AUTOPILOT | HYBRID
   includeHashtags Boolean  @default(true)
   includeSource   Boolean  @default(true)
   maxPostChars    Int      @default(2200)
@@ -147,12 +147,30 @@ model ProjectSettings {
   bannedWords        String[] @default([])
   moderationEnabled  Boolean  @default(false)
 
+  // Hybrid-mode threshold (0-100). Posts with model-reported confidence >= this auto-publish.
+  confidenceThreshold Int @default(80)
+
+  // Weekly skip days. 0=Mon, 1=Tue, ... 6=Sun. Defaults to no skip.
+  skipDays Int[] @default([])
+
+  // Voice per platform. If voiceMode = PER_PLATFORM, voiceOverrides supplies per-platform config.
+  // Shape: { LINKEDIN?: VoiceCfg, TELEGRAM?: VoiceCfg }
+  // VoiceCfg: { writingStyle, customStyle, includeHashtags, includeSource, maxPostChars }
+  voiceMode      VoiceMode @default(UNIFIED)
+  voiceOverrides Json?
+
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }
 
 enum PostMode {
   MANUAL
   AUTOPILOT
+  HYBRID
+}
+
+enum VoiceMode {
+  UNIFIED
+  PER_PLATFORM
 }
 
 // =====================================================================
@@ -192,10 +210,21 @@ model Draft {
   topic       String
   sourceUrl   String?
   sourceTitle String?
-  contentByLang Json      // { en: "...", ru: "..." }
+  contentByLang Json      // { en: "...", ru: "..." } — unified-voice or legacy drafts
+  // Per-platform output when ProjectSettings.voiceMode = PER_PLATFORM.
+  // Shape: { LINKEDIN: { en: "..." }, TELEGRAM: { en: "..." } }. Falls back to contentByLang when null.
+  contentByPlatform Json?
   targets     Platform[]
   status      DraftStatus @default(PENDING)
   scheduledAt DateTime?
+
+  // Generation telemetry (filled by claude.ts when the pipeline creates the draft)
+  tokensInput  Int?
+  tokensOutput Int?
+  costUsd      Float?
+  // Model-reported confidence 0-100. Hybrid mode uses this to decide auto-publish.
+  confidence   Int?
+
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 

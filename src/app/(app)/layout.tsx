@@ -1,10 +1,21 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
-import { Button } from "@/components/ui/button";
-import { signOutAction } from "@/server/oauth-actions";
+import { db } from "@/lib/db";
+import { computeScheduleInfo } from "@/lib/schedule";
 import { getCurrentProject, listUserProjects } from "@/server/project";
-import { ProjectSwitcher } from "@/components/forms/project-switcher";
+import { relShort } from "@/lib/format";
+import { AppSidebar } from "@/components/shell/app-sidebar";
+import { AppTopbar } from "@/components/shell/app-topbar";
+import { CommandPalette, GlobalShortcuts } from "@/components/shell/command-palette";
+
+function initialsFromEmail(email: string | null | undefined): string {
+  if (!email) return "u";
+  const local = email.split("@")[0] ?? "";
+  const parts = local.split(/[._-]+/).filter(Boolean);
+  const first = parts[0]?.[0] ?? local[0] ?? "u";
+  const second = parts[1]?.[0] ?? "";
+  return (first + second).toUpperCase();
+}
 
 export default async function AppLayout({
   children,
@@ -19,49 +30,36 @@ export default async function AppLayout({
     getCurrentProject(session.user.id),
   ]);
 
+  const [pendingDrafts, schedule] = await Promise.all([
+    db.draft.count({
+      where: { projectId: current.id, status: "PENDING" },
+    }),
+    computeScheduleInfo(current.id),
+  ]);
+
+  const email = session.user.email ?? "user";
+  const topicsCount = current.settings?.topics?.length ?? 0;
+
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="border-b bg-background">
-        <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-6">
-          <div className="flex items-center gap-6">
-            <Link href="/" className="flex items-center gap-2 font-semibold">
-              <div className="grid size-7 place-items-center rounded-md bg-foreground text-background">
-                AM
-              </div>
-              <span>Account Manager</span>
-            </Link>
-            <ProjectSwitcher
-              projects={projects.map((p) => ({ id: p.id, name: p.name, status: p.status }))}
-              currentId={current.id}
-            />
-            <nav className="flex items-center gap-1 text-sm">
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/dashboard">Dashboard</Link>
-              </Button>
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/drafts">Drafts</Link>
-              </Button>
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/analytics">Analytics</Link>
-              </Button>
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/settings">Settings</Link>
-              </Button>
-            </nav>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">
-              {session.user.email}
-            </span>
-            <form action={signOutAction}>
-              <Button variant="outline" size="sm">Sign out</Button>
-            </form>
-          </div>
-        </div>
-      </header>
-      <main className="flex-1 bg-muted/40">
-        <div className="mx-auto w-full max-w-5xl px-6 py-8">{children}</div>
+    <div className="app">
+      <AppSidebar
+        projects={projects.map((p) => ({ id: p.id, name: p.name, status: p.status }))}
+        currentProjectId={current.id}
+        userEmail={email}
+        userInitials={initialsFromEmail(email)}
+        badges={{ drafts: pendingDrafts, topics: topicsCount }}
+      />
+      <main className="main">
+        <AppTopbar
+          projectName={current.name}
+          projectStatus={current.status}
+          pendingDraftsCount={pendingDrafts}
+          nextRunRel={schedule ? relShort(schedule.nextAt) : null}
+        />
+        <div className="page">{children}</div>
       </main>
+      <CommandPalette projectId={current.id} projectStatus={current.status} />
+      <GlobalShortcuts />
     </div>
   );
 }

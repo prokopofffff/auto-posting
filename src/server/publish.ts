@@ -28,6 +28,7 @@ function recordPublishError(input: {
 }
 
 export type DraftContent = Record<string, string>; // lang -> text
+export type DraftContentByPlatform = Partial<Record<Platform, DraftContent>>;
 
 function pickContent(content: DraftContent): { lang: string; text: string } | null {
   const en = content.en;
@@ -37,14 +38,28 @@ function pickContent(content: DraftContent): { lang: string; text: string } | nu
   return { lang: first[0], text: first[1] };
 }
 
+function pickPlatformContent(
+  byPlatform: DraftContentByPlatform | null,
+  byLang: DraftContent,
+  platform: Platform,
+): { lang: string; text: string } | null {
+  const platformContent = byPlatform?.[platform];
+  if (platformContent) {
+    const picked = pickContent(platformContent);
+    if (picked) return picked;
+  }
+  return pickContent(byLang);
+}
+
 async function publishToTelegram(
   projectId: string,
   draftId: string,
   conn: ConnectedAccount,
   content: DraftContent,
+  contentByPlatform: DraftContentByPlatform | null,
 ) {
   if (!conn.accessToken) return null;
-  const picked = pickContent(content);
+  const picked = pickPlatformContent(contentByPlatform, content, "TELEGRAM");
   if (!picked) return null;
   const token = decrypt(conn.accessToken);
   try {
@@ -84,9 +99,10 @@ async function publishToLinkedIn(
   draftId: string,
   conn: ConnectedAccount,
   content: DraftContent,
+  contentByPlatform: DraftContentByPlatform | null,
 ) {
   if (!conn.accessToken) return null;
-  const picked = pickContent(content);
+  const picked = pickPlatformContent(contentByPlatform, content, "LINKEDIN");
   if (!picked) return null;
   let token: string;
   try {
@@ -144,11 +160,17 @@ export async function publishDraft(draftId: string): Promise<
   if (draft.status === "PUBLISHED") return { ok: false, error: "Already published." };
 
   const content = draft.contentByLang as DraftContent;
+  const contentByPlatform =
+    (draft.contentByPlatform as DraftContentByPlatform | null) ?? null;
 
   const settings = draft.project.settings;
   if (settings) {
+    const allTexts = [
+      ...Object.values(content),
+      ...Object.values(contentByPlatform ?? {}).flatMap((v) => Object.values(v ?? {})),
+    ];
     const mod = await moderate({
-      texts: Object.values(content),
+      texts: allTexts,
       bannedWords: settings.bannedWords,
       moderationEnabled: settings.moderationEnabled,
     });
@@ -172,9 +194,9 @@ export async function publishDraft(draftId: string): Promise<
     for (const conn of conns) {
       const pub =
         platform === "TELEGRAM"
-          ? await publishToTelegram(draft.projectId, draft.id, conn, content)
+          ? await publishToTelegram(draft.projectId, draft.id, conn, content, contentByPlatform)
           : platform === "LINKEDIN"
-          ? await publishToLinkedIn(draft.projectId, draft.id, conn, content)
+          ? await publishToLinkedIn(draft.projectId, draft.id, conn, content, contentByPlatform)
           : null;
       if (pub) posts.push(pub);
     }
