@@ -148,7 +148,7 @@ Full reference. See `.env.example` for defaults.
 | `AUTH_SECRET` | Auth.js JWT signing key. Generate: `openssl rand -base64 32` |
 | `ENCRYPTION_KEY` | AES-256-GCM key for storing OAuth/bot tokens. Generate: `openssl rand -base64 48` |
 | `AUTH_URL` | Public URL of the app. Local: `http://localhost:3000`. Prod: your domain. |
-| `CRON_SECRET` | Bearer token the cron sidecar / Vercel Cron uses to hit `/api/cron/tick` |
+| `CRON_SECRET` | Bearer token the external scheduler / cron sidecar uses to hit `/api/cron/tick` |
 | `ANTHROPIC_API_KEY` | For post generation + moderation ([console.anthropic.com](https://console.anthropic.com)) |
 
 ### Optional — expands capabilities
@@ -279,9 +279,8 @@ Fastest path, recommended for MVP.
 5. **OAuth callback URLs** — set to your Vercel domain:
    - Google: `https://YOUR-APP.vercel.app/api/auth/callback/google`
    - LinkedIn: `https://YOUR-APP.vercel.app/api/linkedin/callback`
-6. Deploy. Vercel reads `vercel.json` and automatically wires `/api/cron/tick` as an hourly cron job.
-
-Vercel's first deploy runs `npm run build` which includes `.next/standalone`. No special config needed.
+6. Deploy. Vercel's first deploy runs `npm run build` which includes `.next/standalone`. No special config needed.
+7. **Scheduling** — Vercel Hobby only allows *daily* cron jobs, so the pipeline is driven by an external scheduler instead. Point a service like [cron-job.org](https://cron-job.org) at `https://YOUR-APP.vercel.app/api/cron/tick` on an hourly schedule, sending header `Authorization: Bearer ${CRON_SECRET}`. (On the Vercel Pro plan you can instead add a `crons` entry to a `vercel.json` and drop the external scheduler.)
 
 ---
 
@@ -473,7 +472,7 @@ Custom topics are keyword-searched via Google News RSS by default (no key needed
 If the story came from a low-trust source and couldn't be corroborated by other outlets, it's flagged *unverified* — it never auto-publishes regardless of mode, and its confidence is capped so a human reviews it first. Either approve it manually or rely on better-trusted sources.
 
 **Q: Cron isn't firing.**
-- **Vercel:** check Project Settings → Cron Jobs. Ensure `CRON_SECRET` is set.
+- **Vercel:** scheduling runs via an external trigger (e.g. cron-job.org) hitting `/api/cron/tick` hourly — check that job's run history and that it sends `Authorization: Bearer ${CRON_SECRET}`.
 - **Docker:** `docker compose logs cron` — the sidecar logs each tick.
 - Manual trigger: `curl -X POST -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/tick`
 
