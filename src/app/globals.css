@@ -1315,3 +1315,108 @@ hr.div {
   color: var(--fg-4);
 }
 .cmdk-foot .grp { display: flex; align-items: center; gap: 4px; }
+
+/* ============================================================
+   Auth (sign-in / sign-up)
+============================================================ */
+.auth-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background:
+    radial-gradient(70% 55% at 50% -10%, var(--accent-bg), transparent 70%),
+    var(--bg);
+}
+.auth-topbar {
+  height: var(--topbar-h);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+}
+.auth-topbar a { display: flex; align-items: center; gap: 8px; }
+
+.auth-main {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 48px 16px 88px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 392px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.auth-card-head { padding: 22px 24px 0; }
+.auth-eyebrow {
+  font-family: var(--font-plex-mono), monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-4);
+}
+.auth-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 10px 0 4px;
+}
+.auth-sub {
+  font-size: 12.5px;
+  color: var(--fg-3);
+  margin: 0;
+}
+.auth-card-body { padding: 18px 24px 22px; }
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  font-family: var(--font-plex-mono), monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-4);
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.auth-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  background: rgba(248, 113, 113, 0.08);
+  border-radius: var(--r-2);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--err);
+  margin-bottom: 12px;
+}
+
+.auth-foot {
+  padding: 14px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+  font-size: 12.5px;
+  color: var(--fg-3);
+  text-align: center;
+}
+.auth-foot a { color: var(--fg); font-weight: 500; }
+.auth-foot a:hover { color: var(--accent); }
+
+/* full-width form button variant */
+.btn.block { width: 100%; justify-content: center; height: 32px; }
+.btn[disabled] { opacity: 0.6; cursor: not-allowed; }
