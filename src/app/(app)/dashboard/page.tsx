@@ -157,7 +157,7 @@ export default async function DashboardPage() {
       title: "Connect at least 1 account",
       sub: "LinkedIn or Telegram so posts have somewhere to go.",
       done: hasConnection,
-      cta: { href: "/settings", label: "Connect account" },
+      cta: { href: "/settings#channels", label: "Connect account" },
     },
     {
       id: 3,
@@ -420,7 +420,7 @@ export default async function DashboardPage() {
           <div className="dash-card">
             <div className="dash-card-head">
               <h3 className="dash-card-title">Connected accounts</h3>
-              <Link href="/settings" className="btn xs ghost">
+              <Link href="/settings#channels" className="btn xs ghost">
                 <Plus size={11} />
                 <span>Connect</span>
               </Link>
@@ -429,7 +429,7 @@ export default async function DashboardPage() {
               {project.connectedAccounts.length === 0 ? (
                 <div className="muted" style={{ padding: "8px 0" }}>
                   No accounts connected yet.{" "}
-                  <Link href="/settings" style={{ color: "var(--accent)" }}>
+                  <Link href="/settings#channels" style={{ color: "var(--accent)" }}>
                     Connect one →
                   </Link>
                 </div>
@@ -472,7 +472,7 @@ export default async function DashboardPage() {
                       <div className="sub mono">not connected</div>
                     </div>
                     <div className="right">
-                      <Link href="/settings" className="btn xs ghost">Connect</Link>
+                      <Link href="/settings#channels" className="btn xs ghost">Connect</Link>
                     </div>
                   </div>
                 ))}

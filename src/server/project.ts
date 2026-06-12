@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
 import { auth } from "@/auth";
@@ -10,7 +11,11 @@ export async function getCurrentUser() {
   return db.user.findUnique({ where: { id: session.user.id } });
 }
 
-async function ensureOrg(userId: string): Promise<string> {
+// `cache()` dedupes per request: the app layout and the page both call
+// ensureOrg/getCurrentProject while rendering, and without this each concurrent
+// call would independently hit the "no project yet" branch and create its own
+// "My first project" — producing duplicate projects on a fresh account.
+const ensureOrg = cache(async function ensureOrg(userId: string): Promise<string> {
   const m = await db.organizationMember.findFirst({
     where: { userId },
     orderBy: { joined: "asc" },
@@ -22,7 +27,7 @@ async function ensureOrg(userId: string): Promise<string> {
   });
   await db.organizationMember.create({ data: { orgId: org.id, userId, role: "OWNER" } });
   return org.id;
-}
+});
 
 export async function listUserProjects(userId: string) {
   return db.project.findMany({
@@ -32,7 +37,9 @@ export async function listUserProjects(userId: string) {
   });
 }
 
-export async function getCurrentProject(userId: string) {
+export const getCurrentProject = cache(async function getCurrentProject(
+  userId: string,
+) {
   const orgId = await ensureOrg(userId);
   const c = await cookies();
   const pid = c.get(COOKIE)?.value;
@@ -62,7 +69,7 @@ export async function getCurrentProject(userId: string) {
     },
     include: { settings: true, connectedAccounts: true },
   });
-}
+});
 
 // Back-compat alias so existing callers keep working.
 export const getOrCreateDefaultProject = getCurrentProject;

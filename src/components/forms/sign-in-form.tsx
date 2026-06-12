@@ -5,10 +5,6 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { signInWithCredentialsAction } from "@/server/auth-actions";
 import { signInWithGoogle } from "@/server/oauth-actions";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 
 export function SignInForm() {
   const router = useRouter();
@@ -16,7 +12,7 @@ export function SignInForm() {
   const [error, setError] = useState<string | null>(null);
 
   return (
-    <div className="space-y-4">
+    <div>
       <form
         action={(fd: FormData) =>
           startTransition(async () => {
@@ -31,32 +27,45 @@ export function SignInForm() {
             router.refresh();
           })
         }
-        className="space-y-3"
       >
-        <div className="space-y-1.5">
-          <Label htmlFor="email">Email</Label>
-          <Input id="email" name="email" type="email" required autoComplete="email" />
+        <div className="field">
+          <label className="field-label" htmlFor="email">
+            Email
+          </label>
+          <input
+            className="input"
+            id="email"
+            name="email"
+            type="email"
+            required
+            autoComplete="email"
+          />
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="password">Password</Label>
-          <Input id="password" name="password" type="password" required autoComplete="current-password" />
+        <div className="field">
+          <label className="field-label" htmlFor="password">
+            Password
+          </label>
+          <input
+            className="input"
+            id="password"
+            name="password"
+            type="password"
+            required
+            autoComplete="current-password"
+          />
         </div>
-        {error ? <p className="text-sm text-red-600">{error}</p> : null}
-        <Button type="submit" className="w-full" disabled={pending}>
-          {pending ? "Signing in..." : "Sign in"}
-        </Button>
+        {error ? <div className="auth-error">{error}</div> : null}
+        <button className="btn accent block" type="submit" disabled={pending}>
+          {pending ? "Signing in…" : "Sign in"}
+        </button>
       </form>
 
-      <div className="flex items-center gap-2">
-        <Separator className="flex-1" />
-        <span className="text-xs uppercase text-muted-foreground">or</span>
-        <Separator className="flex-1" />
-      </div>
+      <div className="auth-divider">or</div>
 
       <form action={signInWithGoogle}>
-        <Button type="submit" variant="outline" className="w-full">
+        <button className="btn block" type="submit">
           Continue with Google
-        </Button>
+        </button>
       </form>
     </div>
   );

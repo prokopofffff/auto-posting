@@ -1,23 +1,20 @@
 import Link from "next/link";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SignUpForm } from "@/components/forms/sign-up-form";
 
 export default function SignUpPage() {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Create your account</CardTitle>
-        <CardDescription>Start posting in under a minute.</CardDescription>
-      </CardHeader>
-      <CardContent>
+    <div className="auth-card">
+      <div className="auth-card-head">
+        <div className="auth-eyebrow">create account</div>
+        <h1 className="auth-title">Create your account</h1>
+        <p className="auth-sub">Start posting in under a minute.</p>
+      </div>
+      <div className="auth-card-body">
         <SignUpForm />
-        <p className="mt-6 text-center text-sm text-muted-foreground">
-          Already have one?{" "}
-          <Link className="font-medium text-foreground underline" href="/sign-in">
-            Sign in
-          </Link>
-        </p>
-      </CardContent>
-    </Card>
+      </div>
+      <div className="auth-foot">
+        Already have one? <Link href="/sign-in">Sign in</Link>
+      </div>
+    </div>
   );
 }
