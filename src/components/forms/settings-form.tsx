@@ -231,10 +231,11 @@ export function SettingsForm({ projectId, newsApiConfigured, initial }: Props) {
                 </Button>
               </div>
               {hasCustomTopic && !newsApiConfigured && (
-                <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-                  ⚠ Custom topics use NewsAPI. Set <code>NEWSAPI_KEY</code> in
-                  your env (free tier at newsapi.org) or the agent will fall
-                  back to generic tech feeds for these.
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Custom topics are searched via Google News (no key needed).
+                  Set <code>NEWSAPI_KEY</code> in your env (free tier at
+                  newsapi.org) for cleaner article data. Low-trust sources are
+                  cross-checked against other outlets before auto-publishing.
                 </p>
               )}
             </div>

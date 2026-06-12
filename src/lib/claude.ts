@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { NewsItem } from "@/lib/news";
+import type { FactCheck, NewsItem } from "@/lib/news-types";
 
 const MODEL = "claude-opus-4-7";
 
@@ -87,7 +87,36 @@ export type GenerateInput = {
   /** Unified: one voice for all platforms. Per-platform: voice per Platform key. */
   voiceMode: "UNIFIED" | "PER_PLATFORM";
   voice: VoiceCfg | Partial<Record<Platform, VoiceCfg>>;
+  /** Fact-check of the source article — drives hedging and confidence ceiling. */
+  factCheck?: FactCheck;
 };
+
+/** Highest confidence we let an unverified story claim — forces human review. */
+const UNVERIFIED_CONFIDENCE_CEILING = 45;
+
+function verificationBlock(fc: FactCheck): string {
+  if (fc.verdict === "TRUSTED") {
+    return [
+      "## Source verification",
+      "The source is editorially trusted. Write normally and state facts directly.",
+    ].join("\n");
+  }
+  if (fc.verdict === "CORROBORATED") {
+    const witnesses = fc.corroboratingSources.join(", ");
+    return [
+      "## Source verification",
+      `The origin source is not highly trusted, but the story is independently reported by: ${witnesses}.`,
+      "You may state the facts, but attribute claims to reporting (e.g. \"according to reports\") rather than asserting them as confirmed.",
+    ].join("\n");
+  }
+  return [
+    "## Source verification",
+    "WARNING: This story comes from a low-trust source and could NOT be independently corroborated.",
+    "- Frame it cautiously as an unconfirmed report (\"reportedly\", \"a report claims\").",
+    "- Do NOT present any claim as established fact.",
+    `- Cap every post's "confidence" at ${UNVERIFIED_CONFIDENCE_CEILING} so a human reviews it before publishing.`,
+  ].join("\n");
+}
 
 export type GeneratedItem = {
   platform?: Platform;
@@ -225,6 +254,7 @@ export async function generatePost(input: GenerateInput): Promise<GenerationResu
     "",
     "Article summary / excerpt:",
     article.summary || "(no excerpt available — write from the title alone)",
+    input.factCheck ? `\n${verificationBlock(input.factCheck)}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -263,12 +293,17 @@ export async function generatePost(input: GenerateInput): Promise<GenerationResu
   const confidences = cleaned
     .map((p) => p.confidence)
     .filter((c): c is number => typeof c === "number");
-  const confidence =
+  let confidence =
     confidences.length > 0
       ? Math.round(confidences.reduce((s, c) => s + c, 0) / confidences.length)
       : typeof parsed.confidence === "number"
       ? Math.round(parsed.confidence)
       : 90;
+
+  // Hard ceiling for unverified stories, regardless of the model's optimism.
+  if (input.factCheck?.verdict === "UNVERIFIED") {
+    confidence = Math.min(confidence, UNVERIFIED_CONFIDENCE_CEILING);
+  }
 
   return {
     posts: cleaned.map((p) => ({

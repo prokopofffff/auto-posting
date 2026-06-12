@@ -12,6 +12,9 @@ import {
   ExternalLink,
   RefreshCw,
   Send,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldQuestion,
   Trash2,
   X,
 } from "lucide-react";
@@ -33,6 +36,8 @@ type Status =
   | "FAILED"
   | "SKIPPED";
 
+type FactVerdict = "TRUSTED" | "CORROBORATED" | "UNVERIFIED";
+
 export type DraftItem = {
   id: string;
   topic: string;
@@ -41,6 +46,9 @@ export type DraftItem = {
   targets: Platform[];
   status: Status;
   contentByLang: Record<string, string>;
+  factVerdict: FactVerdict | null;
+  sourceTrust: number | null;
+  corroboratingSources: string[];
   createdAt: string;
   updatedAt: string;
   scheduledAt: string | null;
@@ -85,6 +93,40 @@ function StatusBadge({ s }: { s: Status }) {
   if (s === "APPROVED") return <span className="badge-pill accent">queued</span>;
   if (s === "PENDING") return <span className="badge-pill warn">pending</span>;
   return <span className="badge-pill">skipped</span>;
+}
+
+const VERDICT_META: Record<
+  FactVerdict,
+  { cls: string; Icon: typeof ShieldCheck; label: string; title: string }
+> = {
+  TRUSTED: {
+    cls: "ok",
+    Icon: ShieldCheck,
+    label: "trusted",
+    title: "Source is editorially trusted",
+  },
+  CORROBORATED: {
+    cls: "info",
+    Icon: ShieldQuestion,
+    label: "corroborated",
+    title: "Low-trust source, but independently corroborated by other outlets",
+  },
+  UNVERIFIED: {
+    cls: "warn",
+    Icon: ShieldAlert,
+    label: "unverified",
+    title:
+      "Low-trust source with no independent corroboration — review before publishing",
+  },
+};
+
+function VerdictBadge({ v }: { v: FactVerdict }) {
+  const { cls, Icon, label, title } = VERDICT_META[v];
+  return (
+    <span className={`badge-pill ${cls}`} title={title}>
+      <Icon size={11} style={{ verticalAlign: -2 }} /> {label}
+    </span>
+  );
 }
 
 export function DraftsPane({
@@ -327,6 +369,7 @@ export function DraftsPane({
                     draft · {active.id.slice(0, 8)}
                   </span>
                   <StatusBadge s={active.status} />
+                  {active.factVerdict && <VerdictBadge v={active.factVerdict} />}
                   {active.targets.map((t) => (
                     <span key={t} className="badge-pill mono">
                       {t.toLowerCase()}
@@ -464,6 +507,55 @@ export function DraftsPane({
                         {active.sourceTitle}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Source verification */}
+                {active.factVerdict && (
+                  <div style={DETAIL_BOX_STYLE}>
+                    <div
+                      className="mono"
+                      style={{
+                        fontSize: 10,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.05em",
+                        color: "var(--fg-4)",
+                        marginBottom: 6,
+                      }}
+                    >
+                      source verification
+                    </div>
+                    <div
+                      className="mono"
+                      style={{ fontSize: 11, color: "var(--fg-2)", lineHeight: 1.7 }}
+                    >
+                      <div style={{ marginBottom: 4 }}>
+                        <VerdictBadge v={active.factVerdict} />
+                        {typeof active.sourceTrust === "number" && (
+                          <span className="muted-2" style={{ marginLeft: 8 }}>
+                            source trust {Math.round(active.sourceTrust * 100)}%
+                          </span>
+                        )}
+                      </div>
+                      {active.factVerdict === "UNVERIFIED" ? (
+                        <div className="muted">
+                          Low-trust source, no independent reports found. Written
+                          cautiously and held for manual review — it will not
+                          auto-publish.
+                        </div>
+                      ) : active.factVerdict === "CORROBORATED" ? (
+                        <div>
+                          <span className="muted">corroborated by</span> &nbsp;
+                          {active.corroboratingSources.length > 0
+                            ? active.corroboratingSources.join(", ")
+                            : "other outlets"}
+                        </div>
+                      ) : (
+                        <div className="muted">
+                          Source is editorially trusted — published as reported.
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
