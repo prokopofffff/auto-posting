@@ -225,11 +225,25 @@ model Draft {
   // Model-reported confidence 0-100. Hybrid mode uses this to decide auto-publish.
   confidence   Int?
 
+  // Fact-check of the source article (see lib/fact-check.ts). UNVERIFIED drafts
+  // never auto-publish regardless of mode.
+  factVerdict          FactVerdict?
+  // Trust score of the origin source, 0..1.
+  sourceTrust          Float?
+  // Distinct publisher domains that independently reported the same story.
+  corroboratingSources String[]     @default([])
+
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   posts   Post[]
+}
+
+enum FactVerdict {
+  TRUSTED      // origin source is editorially trusted on its own
+  CORROBORATED // low-trust origin, but independently reported elsewhere
+  UNVERIFIED   // low-trust origin, no corroboration found
 }
 
 enum DraftStatus {

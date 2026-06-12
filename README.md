@@ -99,7 +99,7 @@ You'll need accounts/keys for the services below. For a minimal local run you on
 | 4 | **Telegram bot** via [@BotFather](https://t.me/BotFather) | Telegram publishing | Only to publish to Telegram |
 | 5 | **LinkedIn Developer app** | LinkedIn publishing | Only to publish to LinkedIn |
 | 6 | **Google OAuth client** | "Sign in with Google" button | Optional |
-| 7 | **NewsAPI key** | Custom-topic news search | Only if you use custom topics |
+| 7 | **NewsAPI key** | Cleaner custom-topic search | Optional — Google News RSS is used when unset |
 
 ---
 
@@ -157,7 +157,7 @@ Full reference. See `.env.example` for defaults.
 |---|---|
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | "Continue with Google" sign-in button |
 | `LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET` | LinkedIn OAuth + publishing |
-| `NEWSAPI_KEY` | News search for custom (non-template) topics |
+| `NEWSAPI_KEY` | Optional — cleaner search for custom topics (Google News RSS is the keyless fallback) |
 | `TELEGRAM_BOT_TOKEN` | Reserved for future use (per-project bots take precedence today) |
 
 ### Deployment-specific
@@ -188,7 +188,7 @@ A project is a unit with its own topics, voice, schedule, connections, and post 
 ### Topics
 
 - **Templates:** Tech, AI / ML, Development, Web2 / SaaS, Web3 / Crypto, Startups, Design / UX, Security, DevOps / Cloud, Productivity — each backed by curated RSS feeds.
-- **Custom:** free-text keywords (e.g. *indie hacking*, *edge computing*). These are sourced via NewsAPI — set `NEWSAPI_KEY` or they silently produce nothing.
+- **Custom:** free-text keywords (e.g. *indie hacking*, *edge computing*). These are keyword-searched via NewsAPI when `NEWSAPI_KEY` is set, otherwise via Google News RSS (no key needed). Articles from low-trust sources are cross-checked against other outlets before they can auto-publish (see *Fact-checking* below).
 
 ### Connections
 
@@ -261,6 +261,7 @@ Every post goes through the same pipeline, whether triggered manually ("Generate
 Key implementation details:
 
 - **Dedup** — `pickFreshArticle` skips articles whose URL or title matches any of the last 200 posts for that project. No spam repeats.
+- **Fact-checking** — every source gets a trust score (`source-trust.ts`): curated feed and major-outlet domains are high-trust; arbitrary domains (e.g. Google News search hits) are low-trust. A high-trust story ships as-is. A low-trust story is cross-checked — its headline keywords are searched across other publishers (`fact-check.ts`), and it's marked **corroborated** only if independent reputable outlets report the same story. Corroborated stories are written with attribution ("according to reports"); **unverified** stories (low-trust + uncorroborated) are written cautiously, have their confidence capped, and never auto-publish — they always wait for a human.
 - **System-prompt caching** — the per-project system prompt (style + rules + languages + topics) is cached with `cache_control: {type: "ephemeral"}` so repeat generations on the same project are cheap.
 - **Schedule evaluation** — `computeScheduleInfo(projectId)` uses `Intl.DateTimeFormat` to compute the next-run time in the project's timezone. The cron endpoint only triggers projects whose next-run has actually arrived in *their* timezone, not globally.
 - **Parallel-language output** — Claude is asked to produce JSON with one entry per language. The first available language (English preferred, else first entry) is used per platform.
@@ -393,10 +394,12 @@ src/
 │   ├── schedule.ts             # timezone-aware next-run computation
 │   ├── claude.ts               # post generator (cached system prompt)
 │   ├── moderation.ts           # banned words + optional AI moderation
-│   ├── news.ts                 # RSS + NewsAPI hybrid picker
+│   ├── news.ts                 # RSS + NewsAPI/Google News picker + corroboration
 │   ├── news-feeds.ts           # topic → RSS URLs mapping
 │   ├── newsapi.ts              # NewsAPI /v2/everything client
-│   ├── news-types.ts           # shared NewsItem type
+│   ├── news-types.ts           # shared NewsItem / FactCheck types
+│   ├── source-trust.ts         # per-domain trust scoring
+│   ├── fact-check.ts           # cross-source corroboration of low-trust stories
 │   ├── telegram.ts             # Bot API client
 │   ├── linkedin.ts             # OAuth + posts API + signed-state helper
 │   ├── topic-templates.ts      # canonical topics, styles, languages, intervals
@@ -464,7 +467,10 @@ Your LinkedIn Developer app must have the exact redirect URI `{AUTH_URL}/api/lin
 That's LinkedIn's policy, not a bug. The dashboard shows a 14-day warning banner. Click "Reconnect LinkedIn" and re-authorize — the existing connection's token is updated in place.
 
 **Q: Custom topic generates posts about the wrong subject.**
-Custom topics use NewsAPI. If `NEWSAPI_KEY` isn't set, there's no news source for custom topics and the agent falls back to generic tech feeds. Set the key (free tier at [newsapi.org](https://newsapi.org)) and add the topic again.
+Custom topics are keyword-searched via Google News RSS by default (no key needed). For cleaner, better-attributed results set `NEWSAPI_KEY` (free tier at [newsapi.org](https://newsapi.org)) and the agent will prefer NewsAPI. Note NewsAPI's free tier delays articles ~24h and forbids production use.
+
+**Q: A post is stuck "pending review" even in autopilot.**
+If the story came from a low-trust source and couldn't be corroborated by other outlets, it's flagged *unverified* — it never auto-publishes regardless of mode, and its confidence is capped so a human reviews it first. Either approve it manually or rely on better-trusted sources.
 
 **Q: Cron isn't firing.**
 - **Vercel:** check Project Settings → Cron Jobs. Ensure `CRON_SECRET` is set.

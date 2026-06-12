@@ -74,6 +74,7 @@ export async function runPipelineForProject(projectId: string): Promise<Pipeline
     targets,
     voiceMode: isPerPlatform ? "PER_PLATFORM" : "UNIFIED",
     voice: isPerPlatform ? perPlatformVoice(settings, targets) : unifiedVoice(settings),
+    factCheck: article.factCheck,
   });
 
   if (result.posts.length === 0) return { ok: false, error: "Model returned no posts." };
@@ -115,13 +116,19 @@ export async function runPipelineForProject(projectId: string): Promise<Pipeline
       tokensOutput: result.tokensOutput,
       costUsd: result.costUsd,
       confidence: result.confidence,
+      factVerdict: article.factCheck.verdict,
+      sourceTrust: article.factCheck.trust,
+      corroboratingSources: article.factCheck.corroboratingSources,
     },
   });
 
-  // Mode routing
+  // Mode routing. An unverified story (low-trust source, no corroboration)
+  // never auto-publishes — it always waits for a human, regardless of mode.
+  const verified = article.factCheck.verdict !== "UNVERIFIED";
   const shouldAutoPublish =
-    settings.mode === "AUTOPILOT" ||
-    (settings.mode === "HYBRID" && result.confidence >= settings.confidenceThreshold);
+    verified &&
+    (settings.mode === "AUTOPILOT" ||
+      (settings.mode === "HYBRID" && result.confidence >= settings.confidenceThreshold));
 
   if (shouldAutoPublish) {
     const res = await publishDraft(draft.id);
