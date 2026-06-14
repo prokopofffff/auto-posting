@@ -1,10 +1,10 @@
-import { db } from "@/lib/db";
-import { Prisma } from "@prisma/client";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { selectProjectWithRelations, unwrap } from "@/lib/supabase/queries";
 import { generatePost, type VoiceCfg } from "@/lib/claude";
 import { pickFreshArticle } from "@/lib/news";
 import { publishDraft } from "@/server/publish";
 import { computeScheduleInfo } from "@/lib/schedule";
-import type { Platform, ProjectSettings } from "@prisma/client";
+import type { Platform, ProjectSettings } from "@/lib/types";
 
 export type PipelineResult =
   | { ok: true; draftId: string; published: boolean; skipped?: false }
@@ -42,35 +42,37 @@ function perPlatformVoice(
 }
 
 export async function runPipelineForProject(projectId: string): Promise<PipelineResult> {
-  const project = await db.project.findUnique({
-    where: { id: projectId },
-    include: { settings: true, connectedAccounts: true },
-  });
+  const { data: project } = await selectProjectWithRelations(
+    supabaseAdmin,
+    projectId,
+  );
   if (!project) return { ok: false, error: "Project not found." };
   if (project.status !== "ACTIVE") return { ok: true, skipped: true, reason: "Project is paused." };
 
   const settings = project.settings;
   if (!settings) return { ok: false, error: "Project has no settings." };
-  if (settings.topics.length === 0) return { ok: true, skipped: true, reason: "No topics configured." };
+  const topics = settings.topics ?? [];
+  if (topics.length === 0) return { ok: true, skipped: true, reason: "No topics configured." };
 
   const targets: Platform[] = [];
   if (project.connectedAccounts.some((c) => c.platform === "TELEGRAM")) targets.push("TELEGRAM");
   if (
     project.connectedAccounts.some(
-      (c) => c.platform === "LINKEDIN" && (!c.expiresAt || c.expiresAt.getTime() > Date.now()),
+      // expiresAt is an ISO string from supabase-js; parse before comparing.
+      (c) => c.platform === "LINKEDIN" && (!c.expiresAt || new Date(c.expiresAt).getTime() > Date.now()),
     )
   )
     targets.push("LINKEDIN");
   if (targets.length === 0) return { ok: true, skipped: true, reason: "No connected accounts." };
 
-  const article = await pickFreshArticle(projectId, settings.topics);
+  const article = await pickFreshArticle(projectId, topics);
   if (!article) return { ok: true, skipped: true, reason: "No fresh news found for configured topics." };
 
   const isPerPlatform = settings.voiceMode === "PER_PLATFORM";
   const result = await generatePost({
     article,
-    topics: settings.topics,
-    languages: settings.languages,
+    topics,
+    languages: settings.languages ?? ["en"],
     targets,
     voiceMode: isPerPlatform ? "PER_PLATFORM" : "UNIFIED",
     voice: isPerPlatform ? perPlatformVoice(settings, targets) : unifiedVoice(settings),
@@ -100,27 +102,30 @@ export async function runPipelineForProject(projectId: string): Promise<Pipeline
     for (const p of result.posts) contentByLang[p.language] = p.content;
   }
 
-  const draft = await db.draft.create({
-    data: {
-      projectId: project.id,
-      topic: settings.topics[0],
-      sourceUrl: article.url,
-      sourceTitle: article.title,
-      contentByLang,
-      contentByPlatform: isPerPlatform
-        ? (contentByPlatform as Prisma.InputJsonValue)
-        : Prisma.JsonNull,
-      targets,
-      status: "PENDING",
-      tokensInput: result.tokensInput,
-      tokensOutput: result.tokensOutput,
-      costUsd: result.costUsd,
-      confidence: result.confidence,
-      factVerdict: article.factCheck.verdict,
-      sourceTrust: article.factCheck.trust,
-      corroboratingSources: article.factCheck.corroboratingSources,
-    },
-  });
+  const draft = await unwrap(
+    supabaseAdmin
+      .from("Draft")
+      .insert({
+        projectId: project.id,
+        topic: topics[0],
+        sourceUrl: article.url,
+        sourceTitle: article.title,
+        contentByLang,
+        // JSON columns take plain objects/null directly — no Prisma.JsonNull.
+        contentByPlatform: isPerPlatform ? contentByPlatform : null,
+        targets,
+        status: "PENDING",
+        tokensInput: result.tokensInput,
+        tokensOutput: result.tokensOutput,
+        costUsd: result.costUsd,
+        confidence: result.confidence,
+        factVerdict: article.factCheck.verdict,
+        sourceTrust: article.factCheck.trust,
+        corroboratingSources: article.factCheck.corroboratingSources,
+      })
+      .select()
+      .single(),
+  );
 
   // Mode routing. An unverified story (low-trust source, no corroboration)
   // never auto-publishes — it always waits for a human, regardless of mode.
@@ -143,13 +148,13 @@ export async function publishDueScheduledDrafts(): Promise<{
   published: number;
   errors: number;
 }> {
-  const due = await db.draft.findMany({
-    where: {
-      status: "SCHEDULED",
-      scheduledAt: { lte: new Date() },
-    },
-    select: { id: true },
-  });
+  const due = await unwrap(
+    supabaseAdmin
+      .from("Draft")
+      .select("id")
+      .eq("status", "SCHEDULED")
+      .lte("scheduledAt", new Date().toISOString()),
+  );
   let published = 0;
   let errors = 0;
   for (const d of due) {
@@ -161,17 +166,22 @@ export async function publishDueScheduledDrafts(): Promise<{
 }
 
 export async function runPipelineForAllDue(): Promise<{ ran: number; errors: number }> {
-  const projects = await db.project.findMany({
-    where: { status: "ACTIVE" },
-    select: { id: true },
-  });
+  const projects = await unwrap(
+    supabaseAdmin.from("Project").select("id").eq("status", "ACTIVE"),
+  );
+
+  // Resolve every project's schedule concurrently (independent reads), then run
+  // the due pipelines sequentially so we don't fan out concurrent Claude /
+  // LinkedIn / Telegram calls.
+  const schedules = await Promise.all(
+    projects.map((proj) => computeScheduleInfo(proj.id)),
+  );
+  const dueProjects = projects.filter((_, i) => schedules[i]?.dueNow);
 
   let ran = 0;
   let errors = 0;
 
-  for (const proj of projects) {
-    const info = await computeScheduleInfo(proj.id);
-    if (!info?.dueNow) continue;
+  for (const proj of dueProjects) {
     const res = await runPipelineForProject(proj.id);
     if (res.ok) ran++;
     else errors++;

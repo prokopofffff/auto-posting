@@ -2,9 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { Prisma } from "@prisma/client";
-import { db } from "@/lib/db";
-import { getCurrentUser } from "@/server/project";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { unwrap } from "@/lib/supabase/queries";
+import { getCurrentUser, userOwnsProject } from "@/server/project";
 
 const voiceCfgSchema = z.object({
   writingStyle: z.enum([
@@ -60,23 +60,19 @@ export async function saveSettingsAction(input: SaveSettingsInput) {
   }
   const data = parsed.data;
 
-  const project = await db.project.findFirst({
-    where: {
-      id: data.projectId,
-      org: { members: { some: { userId: user.id } } },
-    },
-  });
-  if (!project) return { ok: false as const, error: "Project not found." };
+  if (!(await userOwnsProject(user.id, data.projectId))) {
+    return { ok: false as const, error: "Project not found." };
+  }
 
-  await db.$transaction([
-    db.project.update({
-      where: { id: project.id },
-      data: { name: data.projectName },
-    }),
-    db.projectSettings.upsert({
-      where: { projectId: project.id },
-      create: {
-        projectId: project.id,
+  // The name update and the settings upsert must land together — a single
+  // plpgsql function runs both in one transaction (see migration
+  // *_save_project_settings_rpc.sql). The settings upsert is keyed on the
+  // unique projectId, so the same payload covers create and update.
+  await unwrap(
+    supabaseAdmin.rpc("save_project_settings", {
+      p_project_id: data.projectId,
+      p_name: data.projectName,
+      p_settings: {
         topics: data.topics,
         languages: data.languages,
         writingStyle: data.writingStyle,
@@ -93,33 +89,10 @@ export async function saveSettingsAction(input: SaveSettingsInput) {
         confidenceThreshold: data.confidenceThreshold,
         skipDays: data.skipDays,
         voiceMode: data.voiceMode,
-        voiceOverrides: data.voiceOverrides
-          ? (data.voiceOverrides as Prisma.InputJsonValue)
-          : Prisma.JsonNull,
-      },
-      update: {
-        topics: data.topics,
-        languages: data.languages,
-        writingStyle: data.writingStyle,
-        customStyle: data.customStyle || null,
-        intervalDays: data.intervalDays,
-        preferredHour: data.preferredHour,
-        timezone: data.timezone,
-        mode: data.mode,
-        includeHashtags: data.includeHashtags,
-        includeSource: data.includeSource,
-        maxPostChars: data.maxPostChars,
-        bannedWords: data.bannedWords,
-        moderationEnabled: data.moderationEnabled,
-        confidenceThreshold: data.confidenceThreshold,
-        skipDays: data.skipDays,
-        voiceMode: data.voiceMode,
-        voiceOverrides: data.voiceOverrides
-          ? (data.voiceOverrides as Prisma.InputJsonValue)
-          : Prisma.JsonNull,
+        voiceOverrides: data.voiceOverrides ?? null,
       },
     }),
-  ]);
+  );
 
   revalidatePath("/settings");
   revalidatePath("/dashboard");
@@ -130,13 +103,20 @@ export async function toggleProjectStatusAction(projectId: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not signed in." };
 
-  const project = await db.project.findFirst({
-    where: { id: projectId, org: { members: { some: { userId: user.id } } } },
-  });
+  if (!(await userOwnsProject(user.id, projectId))) {
+    return { ok: false as const, error: "Project not found." };
+  }
+  const { data: project } = await supabaseAdmin
+    .from("Project")
+    .select("status")
+    .eq("id", projectId)
+    .maybeSingle();
   if (!project) return { ok: false as const, error: "Project not found." };
 
   const next = project.status === "ACTIVE" ? "PAUSED" : "ACTIVE";
-  await db.project.update({ where: { id: project.id }, data: { status: next } });
+  await unwrap(
+    supabaseAdmin.from("Project").update({ status: next }).eq("id", projectId),
+  );
   revalidatePath("/dashboard");
   return { ok: true as const, status: next };
 }

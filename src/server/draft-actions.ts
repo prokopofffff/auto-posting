@@ -1,19 +1,23 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { Prisma } from "@prisma/client";
-import { db } from "@/lib/db";
-import { getCurrentUser } from "@/server/project";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { unwrap } from "@/lib/supabase/queries";
+import { getCurrentUser, userOwnsProject } from "@/server/project";
 import { publishDraft } from "@/server/publish";
 import { runPipelineForProject } from "@/server/pipeline";
 
 async function assertDraftOwnership(draftId: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not signed in." };
-  const draft = await db.draft.findFirst({
-    where: { id: draftId, project: { org: { members: { some: { userId: user.id } } } } },
-  });
-  if (!draft) return { ok: false as const, error: "Draft not found." };
+  const { data: draft } = await supabaseAdmin
+    .from("Draft")
+    .select("*")
+    .eq("id", draftId)
+    .maybeSingle();
+  if (!draft || !(await userOwnsProject(user.id, draft.projectId))) {
+    return { ok: false as const, error: "Draft not found." };
+  }
   return { ok: true as const, draft };
 }
 
@@ -29,7 +33,9 @@ export async function approveDraftAction(draftId: string) {
 export async function skipDraftAction(draftId: string) {
   const owned = await assertDraftOwnership(draftId);
   if (!owned.ok) return owned;
-  await db.draft.update({ where: { id: draftId }, data: { status: "SKIPPED" } });
+  await unwrap(
+    supabaseAdmin.from("Draft").update({ status: "SKIPPED" }).eq("id", draftId),
+  );
   revalidatePath("/drafts");
   return { ok: true as const };
 }
@@ -41,10 +47,13 @@ export async function updateDraftContentAction(
   const owned = await assertDraftOwnership(draftId);
   if (!owned.ok) return owned;
   // User edits become authoritative — clear per-platform overrides so publish uses the edited text.
-  await db.draft.update({
-    where: { id: draftId },
-    data: { contentByLang, contentByPlatform: Prisma.JsonNull },
-  });
+  // A SQL JSON null is just `null` (no Prisma.JsonNull).
+  await unwrap(
+    supabaseAdmin
+      .from("Draft")
+      .update({ contentByLang, contentByPlatform: null })
+      .eq("id", draftId),
+  );
   revalidatePath("/drafts");
   return { ok: true as const };
 }
@@ -53,11 +62,17 @@ export async function retryDraftAction(draftId: string) {
   const owned = await assertDraftOwnership(draftId);
   if (!owned.ok) return owned;
   // Wipe failed post attempts so the retry is clean.
-  await db.post.deleteMany({
-    where: { draftId, error: { not: null } },
-  });
+  await unwrap(
+    supabaseAdmin
+      .from("Post")
+      .delete()
+      .eq("draftId", draftId)
+      .not("error", "is", null),
+  );
   // Reset to PENDING so publishDraft will accept it.
-  await db.draft.update({ where: { id: draftId }, data: { status: "PENDING" } });
+  await unwrap(
+    supabaseAdmin.from("Draft").update({ status: "PENDING" }).eq("id", draftId),
+  );
   const res = await publishDraft(draftId);
   revalidatePath("/drafts");
   revalidatePath("/dashboard");
@@ -67,10 +82,9 @@ export async function retryDraftAction(draftId: string) {
 export async function runNowAction(projectId: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not signed in." };
-  const project = await db.project.findFirst({
-    where: { id: projectId, org: { members: { some: { userId: user.id } } } },
-  });
-  if (!project) return { ok: false as const, error: "Project not found." };
+  if (!(await userOwnsProject(user.id, projectId))) {
+    return { ok: false as const, error: "Project not found." };
+  }
   const res = await runPipelineForProject(projectId);
   revalidatePath("/drafts");
   revalidatePath("/dashboard");

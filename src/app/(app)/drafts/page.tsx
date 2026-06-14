@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { unwrap } from "@/lib/supabase/queries";
 import { getCurrentUser, getCurrentProject } from "@/server/project";
 import {
   DraftsPane,
@@ -40,27 +41,28 @@ export default async function DraftsPage({
   const statuses = FILTER_MAP[activeFilter];
 
   const [drafts, statusGroups] = await Promise.all([
-    db.draft.findMany({
-      where: { projectId: project.id, status: { in: statuses } },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-      include: {
-        posts: {
-          orderBy: { publishedAt: "desc" },
-          select: {
-            platform: true,
-            externalUrl: true,
-            error: true,
-            publishedAt: true,
-          },
-        },
-      },
-    }),
-    db.draft.groupBy({
-      by: ["status"],
-      where: { projectId: project.id },
-      _count: { _all: true },
-    }),
+    unwrap(
+      supabaseAdmin
+        .from("Draft")
+        .select(
+          "*, posts:Post(platform, externalUrl, error, publishedAt)",
+        )
+        .eq("projectId", project.id)
+        .in("status", statuses)
+        .order("createdAt", { ascending: false })
+        // Nested posts are ordered newest-first to match the old include order
+        // (referencedTable uses the embedded alias).
+        .order("publishedAt", { ascending: false, referencedTable: "posts" })
+        .limit(100),
+    ),
+    // groupBy({ by: ['status'] }) -> the DraftStatusCount view (one row per
+    // project+status with a count).
+    unwrap(
+      supabaseAdmin
+        .from("DraftStatusCount")
+        .select("status, count")
+        .eq("projectId", project.id),
+    ),
   ]);
 
   const tally: Record<Status, number> = {
@@ -71,7 +73,9 @@ export default async function DraftsPage({
     FAILED: 0,
     SKIPPED: 0,
   };
-  for (const g of statusGroups) tally[g.status as Status] = g._count._all;
+  for (const g of statusGroups) {
+    if (g.status) tally[g.status as Status] = g.count ?? 0;
+  }
 
   const counts: DraftsCounts = {
     pending: tally.PENDING,
@@ -92,20 +96,20 @@ export default async function DraftsPage({
     topic: d.topic,
     sourceTitle: d.sourceTitle,
     sourceUrl: d.sourceUrl,
-    targets: d.targets as ("LINKEDIN" | "TELEGRAM")[],
+    targets: (d.targets ?? []) as ("LINKEDIN" | "TELEGRAM")[],
     status: d.status as Status,
     contentByLang: d.contentByLang as Record<string, string>,
     factVerdict: d.factVerdict,
     sourceTrust: d.sourceTrust,
     corroboratingSources: d.corroboratingSources,
-    createdAt: d.createdAt.toISOString(),
-    updatedAt: d.updatedAt.toISOString(),
-    scheduledAt: d.scheduledAt ? d.scheduledAt.toISOString() : null,
+    createdAt: d.createdAt,
+    updatedAt: d.updatedAt,
+    scheduledAt: d.scheduledAt,
     posts: d.posts.map((p) => ({
       platform: p.platform as "LINKEDIN" | "TELEGRAM",
       externalUrl: p.externalUrl,
       error: p.error,
-      publishedAt: p.publishedAt.toISOString(),
+      publishedAt: p.publishedAt,
     })),
   }));
 

@@ -1,7 +1,8 @@
-import { db } from "@/lib/db";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { unwrap } from "@/lib/supabase/queries";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { refreshAccessToken, type LinkedInTokenResponse } from "@/lib/linkedin";
-import type { ConnectedAccount } from "@prisma/client";
+import type { ConnectedAccount } from "@/lib/types";
 
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
@@ -21,11 +22,13 @@ export async function getValidLinkedInAccessToken(
     );
   }
 
+  // expiresAt is an ISO string from supabase-js; parse before comparing.
+  const expiresAtMs = conn.expiresAt ? new Date(conn.expiresAt).getTime() : null;
   const needsRefresh =
-    !!conn.expiresAt && conn.expiresAt.getTime() - Date.now() < REFRESH_BUFFER_MS;
+    expiresAtMs !== null && expiresAtMs - Date.now() < REFRESH_BUFFER_MS;
 
   if (!needsRefresh) {
-    return decrypt(conn.accessToken);
+    return await decrypt(conn.accessToken);
   }
 
   if (!conn.refreshToken) {
@@ -36,7 +39,7 @@ export async function getValidLinkedInAccessToken(
 
   let tokens: LinkedInTokenResponse;
   try {
-    tokens = await refreshAccessToken(decrypt(conn.refreshToken));
+    tokens = await refreshAccessToken(await decrypt(conn.refreshToken));
   } catch (e) {
     throw new LinkedInReconnectRequiredError(
       `LinkedIn token refresh failed — reconnect the account in Settings. (${(e as Error).message})`,
@@ -44,14 +47,20 @@ export async function getValidLinkedInAccessToken(
   }
 
   const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000);
-  await db.connectedAccount.update({
-    where: { id: conn.id },
-    data: {
-      accessToken: encrypt(tokens.access_token),
-      refreshToken: tokens.refresh_token ? encrypt(tokens.refresh_token) : conn.refreshToken,
-      expiresAt: newExpiresAt,
-    },
-  });
+  const accessToken = await encrypt(tokens.access_token);
+  const refreshToken = tokens.refresh_token
+    ? await encrypt(tokens.refresh_token)
+    : conn.refreshToken;
+  await unwrap(
+    supabaseAdmin
+      .from("ConnectedAccount")
+      .update({
+        accessToken,
+        refreshToken,
+        expiresAt: newExpiresAt.toISOString(),
+      })
+      .eq("id", conn.id),
+  );
 
   return tokens.access_token;
 }

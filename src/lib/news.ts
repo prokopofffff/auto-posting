@@ -1,5 +1,6 @@
 import Parser from "rss-parser";
-import { db } from "@/lib/db";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { unwrap } from "@/lib/supabase/queries";
 import { GLOBAL_FALLBACK_FEEDS, TOPIC_FEEDS } from "@/lib/news-feeds";
 import { fetchNewsApi, isNewsApiConfigured } from "@/lib/newsapi";
 import { buildFactCheck, keywords } from "@/lib/fact-check";
@@ -226,12 +227,14 @@ export async function pickFreshArticle(
   const candidates = await fetchCandidateNews(topics);
   if (candidates.length === 0) return null;
 
-  const recentPosts = await db.post.findMany({
-    where: { projectId },
-    orderBy: { publishedAt: "desc" },
-    take: 200,
-    select: { externalUrl: true, content: true },
-  });
+  const recentPosts = await unwrap(
+    supabaseAdmin
+      .from("Post")
+      .select("externalUrl, content")
+      .eq("projectId", projectId)
+      .order("publishedAt", { ascending: false })
+      .limit(200),
+  );
   const usedUrls = new Set(
     recentPosts.map((p) => p.externalUrl).filter((u): u is string => !!u),
   );

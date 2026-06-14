@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
-import { auth } from "@/auth";
-import { db } from "@/lib/db";
+import { createClient } from "@/lib/supabase/server";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { count } from "@/lib/supabase/queries";
 import { computeScheduleInfo } from "@/lib/schedule";
 import { getCurrentProject, listUserProjects } from "@/server/project";
 import { relShort } from "@/lib/format";
@@ -22,22 +23,29 @@ export default async function AppLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth();
-  if (!session?.user?.id) redirect("/sign-in");
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/sign-in");
 
   const [projects, current] = await Promise.all([
-    listUserProjects(session.user.id),
-    getCurrentProject(session.user.id),
+    listUserProjects(user.id),
+    getCurrentProject(user.id),
   ]);
 
   const [pendingDrafts, schedule] = await Promise.all([
-    db.draft.count({
-      where: { projectId: current.id, status: "PENDING" },
-    }),
+    count(
+      supabaseAdmin
+        .from("Draft")
+        .select("*", { count: "exact", head: true })
+        .eq("projectId", current.id)
+        .eq("status", "PENDING"),
+    ),
     computeScheduleInfo(current.id),
   ]);
 
-  const email = session.user.email ?? "user";
+  const email = user.email ?? "user";
   const topicsCount = current.settings?.topics?.length ?? 0;
 
   return (

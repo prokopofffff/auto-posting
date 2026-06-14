@@ -26,7 +26,7 @@ export default async function ComposePage() {
         first.expiresAt
           ? `linkedin · token in ${Math.max(
               0,
-              Math.round((first.expiresAt.getTime() - Date.now()) / 86_400_000),
+              Math.round((new Date(first.expiresAt).getTime() - Date.now()) / 86_400_000),
             )}d`
           : "linkedin",
     });

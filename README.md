@@ -14,13 +14,12 @@ An AI-powered SaaS that auto-writes and publishes news-driven posts to your Link
 6. [Environment variables](#environment-variables)
 7. [Feature walkthrough](#feature-walkthrough)
 8. [How the pipeline works](#how-the-pipeline-works)
-9. [Deployment — Vercel](#deployment--vercel)
-10. [Deployment — self-hosted (Docker)](#deployment--self-hosted-docker)
-11. [Working with the database](#working-with-the-database)
-12. [Project structure](#project-structure)
-13. [Scripts reference](#scripts-reference)
-14. [Troubleshooting](#troubleshooting)
-15. [Roadmap](#roadmap)
+9. [Deployment — Supabase + Netlify](#deployment--supabase--netlify)
+10. [Working with the database](#working-with-the-database)
+11. [Project structure](#project-structure)
+12. [Scripts reference](#scripts-reference)
+13. [Troubleshooting](#troubleshooting)
+14. [Roadmap](#roadmap)
 
 ---
 
@@ -36,7 +35,7 @@ An AI-powered SaaS that auto-writes and publishes news-driven posts to your Link
 - **Multi-project.** One account can run several independent "projects" — personal brand, company page, client accounts — each with its own topics, voice, schedule, connections, history.
 - **Safety gate.** Per-project banned-words list and an optional Claude-powered moderation check runs before every post.
 - **Analytics.** 30-day sparkline, per-platform and per-topic breakdown, success rate, expiry warnings.
-- **Two deployment paths.** One-click to Vercel *or* `docker compose up` on your own server.
+- **Managed deploy.** Runs on Supabase Cloud (Postgres + Auth + scheduling) fronted by Netlify (Next.js runtime). No servers to babysit.
 
 ---
 
@@ -44,12 +43,12 @@ An AI-powered SaaS that auto-writes and publishes news-driven posts to your Link
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                           Next.js app                            │
+│                  Next.js app (on Netlify)                        │
 │                                                                  │
 │  Landing ─ Auth ─ Dashboard ─ Drafts ─ Analytics ─ Settings      │
 │                                                                  │
 │  API routes:                                                     │
-│   • /api/auth/[...]         Auth.js (email/password + Google)    │
+│   • /auth/callback          Supabase OAuth code exchange        │
 │   • /api/linkedin/*         OAuth authorize + callback           │
 │   • /api/cron/tick          Scheduled pipeline trigger           │
 │   • /api/health             DB liveness check                    │
@@ -60,17 +59,19 @@ An AI-powered SaaS that auto-writes and publishes news-driven posts to your Link
          │                    │                     │
          ▼                    ▼                     ▼
   ┌─────────────┐      ┌─────────────┐       ┌─────────────┐
-  │  Postgres   │      │  Claude     │       │  External   │
-  │  (Prisma)   │      │  Opus 4.7   │       │  sources    │
+  │  Supabase   │      │  Claude     │       │  External   │
+  │  Cloud      │      │  Opus 4.7   │       │  sources    │
   │             │      │             │       │             │
-  │ multi-tenant│      │ - generator │       │ - RSS feeds │
-  │ schema      │      │ - moderator │       │ - NewsAPI   │
-  │ encrypted   │      │             │       │ - LinkedIn  │
-  │ OAuth tokens│      │             │       │ - Telegram  │
+  │ - Postgres  │      │ - generator │       │ - RSS feeds │
+  │   (RLS)     │      │ - moderator │       │ - NewsAPI   │
+  │ - Auth      │      │             │       │ - LinkedIn  │
+  │ - pg_cron   │      │             │       │ - Telegram  │
   └─────────────┘      └─────────────┘       └─────────────┘
 ```
 
-Schema (tables): `User` → `Organization` ↔ `OrganizationMember` → `Project` → `ProjectSettings`, `ConnectedAccount`, `Draft`, `Post`. Auth.js-standard `Account` / `Session` / `VerificationToken` are also present for provider flexibility.
+The app reaches Postgres exclusively through **supabase-js** (browser, server, and service-role clients), with **Row-Level Security** enforcing tenant isolation in the database itself. Identity is handled by **Supabase Auth** (email/password + Google OIDC). Scheduling is driven by **pg_cron + pg_net** inside Supabase, which calls `/api/cron/tick` on the deployed Netlify site.
+
+Schema (tables): `User` → `Organization` ↔ `OrganizationMember` → `Project` → `ProjectSettings`, `ConnectedAccount`, `Draft`, `Post`. The `User` table is kept in sync with `auth.users` by a database trigger.
 
 ---
 
@@ -78,12 +79,13 @@ Schema (tables): `User` → `Organization` ↔ `OrganizationMember` → `Project
 
 - **Framework:** Next.js 16 (App Router) with TypeScript and Tailwind v4 (Turbopack builds)
 - **UI:** shadcn/ui (New York style), Sonner for toasts, Lucide for icons
-- **Auth:** Auth.js v5 (`next-auth@beta`) — JWT sessions, Credentials + Google providers, Prisma adapter
-- **Database:** PostgreSQL with Prisma 6 (versioned migrations)
+- **Auth:** Supabase Auth (email/password + Google OIDC), cookie-bound sessions via `@supabase/ssr`
+- **Database:** Supabase Postgres, accessed via `@supabase/supabase-js` with a generated `Database` type; RLS for multi-tenant isolation; versioned SQL migrations under `supabase/migrations/`
 - **AI:** Anthropic SDK → `claude-opus-4-7` (adaptive thinking + prompt caching)
 - **News sources:** `rss-parser` + NewsAPI `/v2/everything`
-- **Encryption:** Node `crypto` AES-256-GCM for storing LinkedIn OAuth and Telegram bot tokens
-- **Runtime:** Node 24 (Alpine in Docker)
+- **Encryption:** Web Crypto AES-256-GCM (cross-runtime) for storing LinkedIn OAuth and Telegram bot tokens
+- **Scheduling:** Supabase `pg_cron` + `pg_net` → `/api/cron/tick`
+- **Hosting:** Netlify (official `@netlify/plugin-nextjs` runtime) + Supabase Cloud
 
 ---
 
@@ -93,12 +95,12 @@ You'll need accounts/keys for the services below. For a minimal local run you on
 
 | # | Service | Why | Required? |
 |---|---|---|---|
-| 1 | **Postgres** | App data | **Yes** — use [Neon](https://neon.tech) (free) or Docker |
-| 2 | **Node 24+** + **npm 10+** | Runtime | **Yes** |
+| 1 | **Supabase project** | Postgres + Auth | **Yes** — free tier at [supabase.com](https://supabase.com) |
+| 2 | **Node 22+** + **pnpm 10+** | Runtime | **Yes** |
 | 3 | **Anthropic API key** | Post generation + moderation | **Yes** for generation |
 | 4 | **Telegram bot** via [@BotFather](https://t.me/BotFather) | Telegram publishing | Only to publish to Telegram |
 | 5 | **LinkedIn Developer app** | LinkedIn publishing | Only to publish to LinkedIn |
-| 6 | **Google OAuth client** | "Sign in with Google" button | Optional |
+| 6 | **Google OAuth client** | "Sign in with Google" button | Optional (configured in Supabase) |
 | 7 | **NewsAPI key** | Cleaner custom-topic search | Optional — Google News RSS is used when unset |
 
 ---
@@ -107,27 +109,32 @@ You'll need accounts/keys for the services below. For a minimal local run you on
 
 ```bash
 # 1. Install
-npm install
+pnpm install
 
-# 2. Postgres — either use Neon, Supabase, or local Docker
-docker run -d --name am-db -e POSTGRES_PASSWORD=dev -p 5432:5432 postgres:17-alpine
+# 2. Install the Supabase CLI (one-time): https://supabase.com/docs/guides/cli
+#    Then either link a cloud project or run a local stack:
+supabase login
+supabase link --project-ref <your-project-ref>
+#    (or `supabase start` for a fully local Postgres + Auth stack)
 
 # 3. Copy env template
-cp .env.example .env
+cp .env.example .env.local
 
-# 4. Fill in the minimum required values in .env:
-#    DATABASE_URL=postgresql://postgres:dev@localhost:5432/postgres
-#    AUTH_SECRET=$(openssl rand -base64 32)
+# 4. Fill in the minimum required values in .env.local:
+#    NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
+#    NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+#    SUPABASE_SERVICE_ROLE_KEY=...
+#    DIRECT_URL=postgresql://...:5432/postgres        # for migrations
 #    ENCRYPTION_KEY=$(openssl rand -base64 48)
+#    AUTH_SECRET=$(openssl rand -base64 32)
 #    CRON_SECRET=$(openssl rand -base64 32)
 #    ANTHROPIC_API_KEY=sk-ant-...
 
-# 5. Apply schema
-npx prisma generate
-npm run db:migrate:deploy
+# 5. Apply the schema to your Supabase database
+supabase db push      # applies supabase/migrations/* over DIRECT_URL
 
 # 6. Start the dev server
-npm run dev
+pnpm dev
 
 # 7. Open http://localhost:3000 → sign up → you're in.
 ```
@@ -144,29 +151,33 @@ Full reference. See `.env.example` for defaults.
 
 | Name | Purpose |
 |---|---|
-| `DATABASE_URL` | Postgres connection string (`postgresql://user:pass@host:5432/db`) |
-| `AUTH_SECRET` | Auth.js JWT signing key. Generate: `openssl rand -base64 32` |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL (browser-safe) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon/publishable key (browser-safe) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service-role key — server-only, bypasses RLS. **Never** expose to the browser. |
 | `ENCRYPTION_KEY` | AES-256-GCM key for storing OAuth/bot tokens. Generate: `openssl rand -base64 48` |
-| `AUTH_URL` | Public URL of the app. Local: `http://localhost:3000`. Prod: your domain. |
-| `CRON_SECRET` | Bearer token the external scheduler / cron sidecar uses to hit `/api/cron/tick` |
+| `AUTH_SECRET` | HMAC key for LinkedIn OAuth signed-state (CSRF). Generate: `openssl rand -base64 32` |
+| `CRON_SECRET` | Bearer token that `/api/cron/tick` requires; the Supabase pg_cron job sends it |
 | `ANTHROPIC_API_KEY` | For post generation + moderation ([console.anthropic.com](https://console.anthropic.com)) |
+
+### Migrations / tooling only
+
+| Name | Purpose |
+|---|---|
+| `DATABASE_URL` | Pooled Postgres URL (PgBouncer, port 6543) for the `supabase` CLI / transient connections |
+| `DIRECT_URL` | Direct Postgres URL (port 5432) — required for `supabase db push` / migrations |
+
+The running app never reads these; it talks to Postgres through supabase-js.
 
 ### Optional — expands capabilities
 
 | Name | Needed for |
 |---|---|
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | "Continue with Google" sign-in button |
+| `AUTH_URL` | Fallback public origin when forwarded headers are absent (local/edge); used to build absolute OAuth redirect URIs |
 | `LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET` | LinkedIn OAuth + publishing |
-| `NEWSAPI_KEY` | Optional — cleaner search for custom topics (Google News RSS is the keyless fallback) |
+| `NEWSAPI_KEY` | Cleaner search for custom topics (Google News RSS is the keyless fallback) |
 | `TELEGRAM_BOT_TOKEN` | Reserved for future use (per-project bots take precedence today) |
 
-### Deployment-specific
-
-| Name | Needed for |
-|---|---|
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Docker Compose Postgres service (defaults exist) |
-| `PORT` | Docker Compose host port mapping (default 3000) |
-| `CRON_INTERVAL` | Docker cron sidecar ping frequency in seconds (default 3600 = 1h) |
+> **Google sign-in** is handled by Supabase Auth. Configure the Google OAuth client in the Supabase dashboard (Authentication → Providers → Google) — there is no `GOOGLE_CLIENT_ID`/`SECRET` in the app env.
 
 ---
 
@@ -268,96 +279,66 @@ Key implementation details:
 
 ---
 
-## Deployment — Vercel
+## Deployment — Supabase + Netlify
 
-Fastest path, recommended for MVP.
+The app runs on **Supabase Cloud** (Postgres + Auth + scheduling) fronted by **Netlify** (Next.js runtime).
 
-1. Push this repo to GitHub.
-2. Import into [vercel.com](https://vercel.com).
-3. **Environment variables** — add everything from the Required section above plus any optional ones you want. Skip Docker-specific ones.
-4. **Database** — provision Postgres on [Neon](https://neon.tech) (free tier) or the Vercel Marketplace, set `DATABASE_URL`.
-5. **OAuth callback URLs** — set to your Vercel domain:
-   - Google: `https://YOUR-APP.vercel.app/api/auth/callback/google`
-   - LinkedIn: `https://YOUR-APP.vercel.app/api/linkedin/callback`
-6. Deploy. Vercel's first deploy runs `npm run build` which includes `.next/standalone`. No special config needed.
-7. **Scheduling** — Vercel Hobby only allows *daily* cron jobs, so the pipeline is driven by an external scheduler instead. Point a service like [cron-job.org](https://cron-job.org) at `https://YOUR-APP.vercel.app/api/cron/tick` on an hourly schedule, sending header `Authorization: Bearer ${CRON_SECRET}`. (On the Vercel Pro plan you can instead add a `crons` entry to a `vercel.json` and drop the external scheduler.)
+### 1. Supabase
 
----
+1. Create a project at [supabase.com](https://supabase.com).
+2. Apply the schema: `supabase link --project-ref <ref>` then `supabase db push` (runs every file in `supabase/migrations/` over the direct connection). This also installs RLS policies and the `auth.users` → `User` sync trigger.
+3. **Auth providers** — enable Email and (optionally) Google under Authentication → Providers. For Google, paste your Google OAuth client ID/secret into Supabase and register `https://<ref>.supabase.co/auth/v1/callback` as the Google redirect URI.
+4. **Redirect URLs** — under Authentication → URL Configuration add your Netlify site URL (and `http://localhost:3000` for local dev) to the allow-list.
+5. **Scheduling (pg_cron + pg_net)** — enable the `pg_cron` and `pg_net` extensions, then schedule a job that `POST`s to `https://YOUR-SITE.netlify.app/api/cron/tick` with header `Authorization: Bearer <CRON_SECRET>`. Store `CRON_SECRET` as a Supabase secret/vault entry the job reads (see `supabase/migrations/` for the scheduling migration).
 
-## Deployment — self-hosted (Docker)
+### 2. Netlify
 
-For when you want full control, multiple instances, or to avoid Vercel limits.
+1. Push this repo to GitHub and import it into [netlify.com](https://app.netlify.com).
+2. The official `@netlify/plugin-nextjs` runtime is auto-detected from `netlify.toml` — the build is a plain `next build`, no extra config.
+3. **Environment variables** — add everything from the *Required* section (Supabase URL/anon/service-role, `ENCRYPTION_KEY`, `AUTH_SECRET`, `CRON_SECRET`, `ANTHROPIC_API_KEY`) plus any optional ones (`LINKEDIN_*`, `NEWSAPI_KEY`, `TELEGRAM_BOT_TOKEN`). `DATABASE_URL`/`DIRECT_URL` are only needed for CLI migrations, not the running site.
+4. **OAuth callback URLs** — set the LinkedIn redirect URI to `https://YOUR-SITE.netlify.app/api/linkedin/callback`. Google's callback is owned by Supabase (step 1.3), not Netlify.
+5. Deploy.
 
-Ships three containers:
-
-| Service | Image | Role |
-|---|---|---|
-| `app` | built from `Dockerfile` | Next.js standalone server |
-| `db` | `postgres:17-alpine` | Database with persistent volume |
-| `cron` | `alpine:3.20` | Curls `/api/cron/tick` every `CRON_INTERVAL` seconds (replaces Vercel Cron) |
-
-```bash
-# 1. Set env variables
-cp .env.example .env
-# Fill at minimum: AUTH_SECRET, ENCRYPTION_KEY, CRON_SECRET,
-# ANTHROPIC_API_KEY, POSTGRES_PASSWORD.
-# Generate secrets:
-#   openssl rand -base64 32   → AUTH_SECRET, CRON_SECRET
-#   openssl rand -base64 48   → ENCRYPTION_KEY
-
-# 2. Build and start
-docker compose up -d --build
-
-# 3. Watch logs
-docker compose logs -f app
-
-# 4. Stop
-docker compose down
-
-# 5. Full reset (wipes DB)
-docker compose down -v
-```
-
-**Reverse proxy + TLS:** put Caddy or nginx in front of the `app` service on port 3000, set `AUTH_URL=https://your-domain.com` in `.env`, restart the `app` container. Update LinkedIn and Google OAuth callbacks to the new domain.
-
-**Healthcheck:** `GET /api/health` returns `{ok: true, ts: ...}` when Postgres is reachable. The Docker HEALTHCHECK uses this; your orchestrator can use it as a readiness probe.
-
-**Migrations on boot:** `docker/entrypoint.sh` runs `prisma migrate deploy` before starting the server. The schema is brought up to date idempotently every time the app container starts.
+**Healthcheck:** `GET /api/health` returns `{ok: true, ts: ...}` when Supabase is reachable (a `head` count against `Project`). Use it as a readiness probe.
 
 ---
 
 ## Working with the database
 
+All schema changes are versioned SQL under `supabase/migrations/`. There is no ORM — the app uses supabase-js against a hand-maintained generated `Database` type in `src/lib/database.types.ts`.
+
 ### Apply pending migrations
 
 ```bash
-npm run db:migrate:deploy      # production-safe, applies any unapplied migrations
+supabase db push              # applies any unapplied migrations over DIRECT_URL
 ```
 
-### Create a new migration (dev)
-
-After editing `prisma/schema.prisma`:
+### Create a new migration
 
 ```bash
-npm run db:migrate -- --name add_retry_count
-# creates prisma/migrations/<ts>_add_retry_count/ with SQL
-# Commit the new folder to git.
+supabase migration new add_retry_count
+# edit the generated supabase/migrations/<ts>_add_retry_count.sql
+# then regenerate the TypeScript types:
+supabase gen types typescript --linked > src/lib/database.types.ts
+# Commit both the SQL file and the updated types.
 ```
 
 ### Inspect the DB
 
 ```bash
-npm run db:studio              # opens Prisma Studio (GUI)
+supabase db studio            # opens the Supabase Studio DB GUI
 ```
 
 ### Current schema at a glance
 
-- `User` / `Account` / `Session` / `VerificationToken` — Auth.js standard tables
+- `User` — mirrors `auth.users` (kept in sync by a DB trigger)
 - `Organization` + `OrganizationMember` — multi-tenancy
 - `Project` + `ProjectSettings` — per-project configuration (topics, voice, schedule, mode, safety, languages)
 - `ConnectedAccount` — LinkedIn + Telegram tokens (AES-encrypted at rest)
 - `Draft` — AI-generated posts before they go live (pending / published / failed / skipped)
 - `Post` — actual published records with external URL and/or failure reason
+
+RLS policies scope every table to the caller's organization; the service-role key bypasses RLS for trusted server-side work (cron, publishing).
 
 ---
 
@@ -373,8 +354,8 @@ src/
 │   │   ├── analytics/          #   30-day metrics + sparkline
 │   │   ├── settings/           #   6 tabs: General/Topics/Voice/Schedule/Mode/Safety
 │   │   └── layout.tsx          #   header, project switcher, sign-out
+│   ├── auth/callback/          # Supabase OAuth code exchange
 │   ├── api/
-│   │   ├── auth/[...nextauth]/ #   Auth.js catch-all
 │   │   ├── linkedin/{authorize,callback}/
 │   │   ├── cron/tick/          #   scheduled pipeline entry
 │   │   └── health/             #   DB liveness
@@ -388,8 +369,14 @@ src/
 │   └── analytics-sparkline.tsx
 │
 ├── lib/
-│   ├── db.ts                   # Prisma client
-│   ├── crypto.ts               # AES-256-GCM wrappers for token storage
+│   ├── supabase/               # supabase-js clients + helpers
+│   │   ├── browser.ts          #   browser (anon) client
+│   │   ├── server.ts           #   cookie-bound server client (@supabase/ssr)
+│   │   ├── service.ts          #   service-role client (bypasses RLS)
+│   │   ├── middleware.ts       #   session refresh for the proxy
+│   │   └── queries.ts          #   shared typed query helpers
+│   ├── database.types.ts       # generated Database type (source of truth for tables)
+│   ├── crypto.ts               # cross-runtime AES-256-GCM token storage
 │   ├── schedule.ts             # timezone-aware next-run computation
 │   ├── claude.ts               # post generator (cached system prompt)
 │   ├── moderation.ts           # banned words + optional AI moderation
@@ -405,8 +392,8 @@ src/
 │   └── utils.ts                # cn()
 │
 ├── server/
-│   ├── auth-actions.ts         # sign-up, sign-in
-│   ├── oauth-actions.ts        # Google sign-in, sign-out
+│   ├── auth-actions.ts         # sign-up, sign-in (Supabase Auth)
+│   ├── oauth-actions.ts        # Google sign-in, sign-out (Supabase Auth)
 │   ├── project.ts              # getCurrentUser, getCurrentProject
 │   ├── project-actions.ts      # create/rename/switch/delete
 │   ├── settings-actions.ts     # saveSettings, toggleProjectStatus
@@ -416,21 +403,13 @@ src/
 │   ├── pipeline.ts             # runPipelineForProject, runPipelineForAllDue
 │   └── analytics.ts            # getAnalytics
 │
-├── auth.ts                     # Auth.js config (Credentials + Google + Prisma adapter)
-├── auth-handlers.ts            # exports GET/POST for the route file
 ├── proxy.ts                    # route protection (Next.js 16 proxy)
-└── types/next-auth.d.ts        # Session type augmentation
+└── types/                      # shared type augmentations
 
-prisma/
-├── schema.prisma
-└── migrations/                 # versioned SQL migrations
+supabase/
+└── migrations/                 # versioned SQL migrations (schema, RLS, triggers, pg_cron)
 
-docker/
-└── entrypoint.sh               # prisma migrate deploy → node server.js
-
-Dockerfile
-docker-compose.yml
-vercel.json
+netlify.toml                    # Netlify build + Next.js runtime config
 .env.example
 ```
 
@@ -439,14 +418,16 @@ vercel.json
 ## Scripts reference
 
 ```bash
-npm run dev                     # Next.js dev server with Turbopack
-npm run build                   # production build (outputs .next/standalone for Docker)
-npm start                       # run the production server
-npm run lint                    # ESLint
+pnpm dev                        # Next.js dev server with Turbopack
+pnpm build                      # production build (next build)
+pnpm start                      # run the production server
+pnpm lint                       # ESLint
 
-npm run db:migrate              # prisma migrate dev — creates new migration from schema changes
-npm run db:migrate:deploy       # prisma migrate deploy — applies pending migrations (prod safe)
-npm run db:studio               # prisma studio — DB GUI at http://localhost:5555
+# Database (Supabase CLI — install separately):
+supabase db push                # apply pending migrations over DIRECT_URL
+supabase migration new <name>   # scaffold a new SQL migration
+supabase gen types typescript --linked > src/lib/database.types.ts
+supabase db studio              # DB GUI
 ```
 
 ---
@@ -454,13 +435,16 @@ npm run db:studio               # prisma studio — DB GUI at http://localhost:5
 ## Troubleshooting
 
 **Q: Landing page loads but sign-up fails with 500.**
-Check `DATABASE_URL` is reachable and migrations have been applied (`npm run db:migrate:deploy`). Also confirm `AUTH_SECRET` and `ENCRYPTION_KEY` are set — empty values cause cryptic crashes.
+Check that `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are set and that migrations have been applied (`supabase db push`). Also confirm `ENCRYPTION_KEY` and `AUTH_SECRET` are set — empty values cause cryptic crashes.
 
 **Q: "Couldn't post to chat" when connecting Telegram.**
 The bot must be added to the channel **as an admin** with the "Post Messages" permission. The channel ID should be `@username` for public channels or the numeric `-100xxxxxxxxxx` for private ones (get it from [@userinfobot](https://t.me/userinfobot) or [@getidsbot](https://t.me/getidsbot)).
 
 **Q: LinkedIn callback errors with "invalid_redirect_uri".**
 Your LinkedIn Developer app must have the exact redirect URI `{AUTH_URL}/api/linkedin/callback` registered. Mismatches (trailing slash, http vs https, wrong host) fail.
+
+**Q: Google sign-in bounces back with an error.**
+Google sign-in runs through Supabase Auth. Confirm the Google provider is enabled in the Supabase dashboard, that `https://<ref>.supabase.co/auth/v1/callback` is a registered Google redirect URI, and that your site origin is in Supabase's Authentication → URL Configuration allow-list.
 
 **Q: LinkedIn connection expired after 60 days.**
 That's LinkedIn's policy, not a bug. The dashboard shows a 14-day warning banner. Click "Reconnect LinkedIn" and re-authorize — the existing connection's token is updated in place.
@@ -472,12 +456,11 @@ Custom topics are keyword-searched via Google News RSS by default (no key needed
 If the story came from a low-trust source and couldn't be corroborated by other outlets, it's flagged *unverified* — it never auto-publishes regardless of mode, and its confidence is capped so a human reviews it first. Either approve it manually or rely on better-trusted sources.
 
 **Q: Cron isn't firing.**
-- **Vercel:** scheduling runs via an external trigger (e.g. cron-job.org) hitting `/api/cron/tick` hourly — check that job's run history and that it sends `Authorization: Bearer ${CRON_SECRET}`.
-- **Docker:** `docker compose logs cron` — the sidecar logs each tick.
-- Manual trigger: `curl -X POST -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/tick`
+- Scheduling runs from Supabase `pg_cron` + `pg_net`, which `POST`s to `/api/cron/tick`. Check the `cron.job` / `cron.job_run_details` tables in Supabase, and confirm the job sends `Authorization: Bearer <CRON_SECRET>` matching the site's `CRON_SECRET`.
+- Manual trigger: `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://YOUR-SITE.netlify.app/api/cron/tick`
 
-**Q: Got a Prisma error on boot — "The table ... does not exist".**
-Migrations haven't run. Locally: `npm run db:migrate:deploy`. In Docker: the entrypoint should handle it automatically — check `docker compose logs app` for the migrate step output.
+**Q: Got a "relation ... does not exist" / RLS error.**
+Migrations haven't run or RLS is blocking the query. Run `supabase db push`, and for trusted server-side reads make sure the code path uses the service-role client (`src/lib/supabase/service.ts`), which bypasses RLS.
 
 **Q: Moderation keeps blocking posts.**
 Review the reason shown in the Failed section of `/drafts`. If AI moderation is over-triggering for your niche, turn it off and rely on banned words instead. The AI moderator only blocks hate speech, illegal content, direct incitement, and explicit material — opinionated/provocative content is allowed.
@@ -494,11 +477,10 @@ Shipped (Phases 1–10):
 - [x] Claude generator with prompt caching + adaptive thinking
 - [x] Manual approval flow + autopilot + failed-post retry
 - [x] Timezone-aware scheduling + cron endpoint + onboarding
-- [x] Vercel + Docker deployment paths
-- [x] Versioned Prisma migrations
 - [x] Expiry warning banner + reconnect flow
 - [x] Safety gate (banned words + AI moderation)
 - [x] Analytics page (sparkline, platforms, topics, success rate)
+- [x] Re-platform onto Supabase Cloud (Postgres + Auth + RLS) and Netlify
 
 Planned:
 

@@ -2,10 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { unwrap } from "@/lib/supabase/queries";
 import { encrypt } from "@/lib/crypto";
 import { getMe, sendMessage } from "@/lib/telegram";
-import { getCurrentUser } from "@/server/project";
+import { getCurrentUser, userOwnsProject } from "@/server/project";
 
 const connectSchema = z.object({
   projectId: z.string().min(1),
@@ -22,10 +23,9 @@ export async function connectTelegramAction(input: z.input<typeof connectSchema>
   if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message ?? "Invalid input." };
   const { projectId, botToken, chatId, sendTestMessage } = parsed.data;
 
-  const project = await db.project.findFirst({
-    where: { id: projectId, org: { members: { some: { userId: user.id } } } },
-  });
-  if (!project) return { ok: false as const, error: "Project not found." };
+  if (!(await userOwnsProject(user.id, projectId))) {
+    return { ok: false as const, error: "Project not found." };
+  }
 
   let bot;
   try {
@@ -46,28 +46,20 @@ export async function connectTelegramAction(input: z.input<typeof connectSchema>
     }
   }
 
-  await db.connectedAccount.upsert({
-    where: {
-      projectId_platform_externalId: {
+  // Composite unique key (projectId, platform, externalId) drives the upsert.
+  await unwrap(
+    supabaseAdmin.from("ConnectedAccount").upsert(
+      {
         projectId,
         platform: "TELEGRAM",
         externalId: chatId,
+        displayName: bot.username ?? bot.first_name,
+        accessToken: await encrypt(botToken),
+        meta: { botUsername: bot.username, botId: bot.id },
       },
-    },
-    create: {
-      projectId,
-      platform: "TELEGRAM",
-      externalId: chatId,
-      displayName: bot.username ?? bot.first_name,
-      accessToken: encrypt(botToken),
-      meta: { botUsername: bot.username, botId: bot.id },
-    },
-    update: {
-      displayName: bot.username ?? bot.first_name,
-      accessToken: encrypt(botToken),
-      meta: { botUsername: bot.username, botId: bot.id },
-    },
-  });
+      { onConflict: "projectId,platform,externalId" },
+    ),
+  );
 
   revalidatePath("/settings");
   revalidatePath("/dashboard");
@@ -78,12 +70,19 @@ export async function disconnectAccountAction(connectionId: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not signed in." };
 
-  const conn = await db.connectedAccount.findFirst({
-    where: { id: connectionId, project: { org: { members: { some: { userId: user.id } } } } },
-  });
-  if (!conn) return { ok: false as const, error: "Connection not found." };
+  // Resolve the connection's owning project, then verify the user owns it.
+  const { data: conn } = await supabaseAdmin
+    .from("ConnectedAccount")
+    .select("id, projectId")
+    .eq("id", connectionId)
+    .maybeSingle();
+  if (!conn || !(await userOwnsProject(user.id, conn.projectId))) {
+    return { ok: false as const, error: "Connection not found." };
+  }
 
-  await db.connectedAccount.delete({ where: { id: conn.id } });
+  await unwrap(
+    supabaseAdmin.from("ConnectedAccount").delete().eq("id", conn.id),
+  );
   revalidatePath("/settings");
   revalidatePath("/dashboard");
   return { ok: true as const };

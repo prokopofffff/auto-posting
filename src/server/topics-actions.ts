@@ -1,8 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { db } from "@/lib/db";
-import { getCurrentUser } from "@/server/project";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { unwrap } from "@/lib/supabase/queries";
+import { getCurrentUser, userOwnsProject } from "@/server/project";
 
 const MAX_TOPICS = 100;
 const MAX_TOPIC_LEN = 80;
@@ -14,18 +15,25 @@ function normalizeName(s: string): string {
 async function ownedSettings(projectId: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not signed in." };
-  const project = await db.project.findFirst({
-    where: { id: projectId, org: { members: { some: { userId: user.id } } } },
-    include: { settings: true },
-  });
-  if (!project) return { ok: false as const, error: "Project not found." };
-  if (!project.settings) {
-    const created = await db.projectSettings.create({
-      data: { projectId: project.id, topics: [], languages: ["en"] },
-    });
-    return { ok: true as const, project, settings: created };
+  if (!(await userOwnsProject(user.id, projectId))) {
+    return { ok: false as const, error: "Project not found." };
   }
-  return { ok: true as const, project, settings: project.settings };
+  const { data: settings } = await supabaseAdmin
+    .from("ProjectSettings")
+    .select("*")
+    .eq("projectId", projectId)
+    .maybeSingle();
+  if (!settings) {
+    const created = await unwrap(
+      supabaseAdmin
+        .from("ProjectSettings")
+        .insert({ projectId, topics: [], languages: ["en"] })
+        .select()
+        .single(),
+    );
+    return { ok: true as const, settings: created };
+  }
+  return { ok: true as const, settings };
 }
 
 export async function addTopicAction(projectId: string, name: string) {
@@ -34,16 +42,19 @@ export async function addTopicAction(projectId: string, name: string) {
   const clean = normalizeName(name);
   if (!clean) return { ok: false as const, error: "Topic name is required." };
   if (clean.length > MAX_TOPIC_LEN) return { ok: false as const, error: "Topic name too long." };
-  if (owned.settings.topics.includes(clean)) {
+  const topics = owned.settings.topics ?? [];
+  if (topics.includes(clean)) {
     return { ok: false as const, error: "Already in your list." };
   }
-  if (owned.settings.topics.length >= MAX_TOPICS) {
+  if (topics.length >= MAX_TOPICS) {
     return { ok: false as const, error: `Max ${MAX_TOPICS} topics.` };
   }
-  await db.projectSettings.update({
-    where: { projectId },
-    data: { topics: [...owned.settings.topics, clean] },
-  });
+  await unwrap(
+    supabaseAdmin
+      .from("ProjectSettings")
+      .update({ topics: [...topics, clean] })
+      .eq("projectId", projectId),
+  );
   revalidatePath("/topics");
   revalidatePath("/dashboard");
   return { ok: true as const };
@@ -53,14 +64,17 @@ export async function removeTopicsAction(projectId: string, names: string[]) {
   const owned = await ownedSettings(projectId);
   if (!owned.ok) return owned;
   const drop = new Set(names);
-  const next = owned.settings.topics.filter((t) => !drop.has(t));
-  await db.projectSettings.update({
-    where: { projectId },
-    data: { topics: next },
-  });
+  const topics = owned.settings.topics ?? [];
+  const next = topics.filter((t) => !drop.has(t));
+  await unwrap(
+    supabaseAdmin
+      .from("ProjectSettings")
+      .update({ topics: next })
+      .eq("projectId", projectId),
+  );
   revalidatePath("/topics");
   revalidatePath("/dashboard");
-  return { ok: true as const, removed: owned.settings.topics.length - next.length };
+  return { ok: true as const, removed: topics.length - next.length };
 }
 
 export async function bulkImportTopicsAction(projectId: string, raw: string) {
@@ -74,7 +88,8 @@ export async function bulkImportTopicsAction(projectId: string, raw: string) {
   if (lines.length === 0) {
     return { ok: false as const, error: "No valid topics in input." };
   }
-  const existing = new Set(owned.settings.topics);
+  const topics = owned.settings.topics ?? [];
+  const existing = new Set(topics);
   const added: string[] = [];
   for (const l of lines) {
     if (existing.has(l)) continue;
@@ -85,10 +100,12 @@ export async function bulkImportTopicsAction(projectId: string, raw: string) {
   if (added.length === 0) {
     return { ok: false as const, error: "All topics already in your list." };
   }
-  await db.projectSettings.update({
-    where: { projectId },
-    data: { topics: [...owned.settings.topics, ...added] },
-  });
+  await unwrap(
+    supabaseAdmin
+      .from("ProjectSettings")
+      .update({ topics: [...topics, ...added] })
+      .eq("projectId", projectId),
+  );
   revalidatePath("/topics");
   revalidatePath("/dashboard");
   return { ok: true as const, added: added.length };

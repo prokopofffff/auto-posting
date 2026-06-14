@@ -2,11 +2,15 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { getCurrentUser } from "@/server/project";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import {
+  selectProjectWithRelations,
+  unwrap,
+} from "@/lib/supabase/queries";
+import { getCurrentUser, userOwnsProject } from "@/server/project";
 import { publishDraft } from "@/server/publish";
 import { generateAdHocPost } from "@/lib/claude";
-import type { Platform } from "@prisma/client";
+import type { Platform } from "@/lib/types";
 
 const composeInputSchema = z.object({
   projectId: z.string().min(1),
@@ -33,10 +37,13 @@ export type ComposeActionInput = z.input<typeof composeActionSchema>;
 async function ownedProject(projectId: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not signed in." };
-  const project = await db.project.findFirst({
-    where: { id: projectId, org: { members: { some: { userId: user.id } } } },
-    include: { connectedAccounts: true, settings: true },
-  });
+  if (!(await userOwnsProject(user.id, projectId))) {
+    return { ok: false as const, error: "Project not found." };
+  }
+  const { data: project } = await selectProjectWithRelations(
+    supabaseAdmin,
+    projectId,
+  );
   if (!project) return { ok: false as const, error: "Project not found." };
   return { ok: true as const, project };
 }
@@ -79,17 +86,21 @@ export async function composeSubmitAction(input: ComposeActionInput) {
       ? "SCHEDULED"
       : "PENDING";
 
-  const draft = await db.draft.create({
-    data: {
-      projectId: data.projectId,
-      topic: data.topic,
-      sourceUrl: data.sourceUrl || null,
-      contentByLang: { [data.language]: data.content },
-      targets,
-      status,
-      scheduledAt,
-    },
-  });
+  const draft = await unwrap(
+    supabaseAdmin
+      .from("Draft")
+      .insert({
+        projectId: data.projectId,
+        topic: data.topic,
+        sourceUrl: data.sourceUrl || null,
+        contentByLang: { [data.language]: data.content },
+        targets,
+        status,
+        scheduledAt: scheduledAt ? scheduledAt.toISOString() : null,
+      })
+      .select()
+      .single(),
+  );
 
   if (data.mode === "now") {
     const res = await publishDraft(draft.id);

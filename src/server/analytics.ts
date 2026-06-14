@@ -1,4 +1,5 @@
-import { db } from "@/lib/db";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { count, unwrap, withDates } from "@/lib/supabase/queries";
 
 export type AnalyticsSummary = {
   totalPublished: number;
@@ -26,52 +27,86 @@ function dayKey(d: Date): string {
   return d.toISOString().slice(0, 10); // YYYY-MM-DD UTC
 }
 
+// Exact head-count of Post rows, replacing the old db.post.count(). supabase-js
+// returns the tally on `count` (not `data`) for a head request, so these read it
+// directly rather than via unwrap().
+async function countPosts(
+  projectId: string,
+  kind: "published" | "failed",
+): Promise<number> {
+  let q = supabaseAdmin
+    .from("Post")
+    .select("*", { count: "exact", head: true })
+    .eq("projectId", projectId);
+  q = kind === "published" ? q.is("error", null) : q.not("error", "is", null);
+  return count(q);
+}
+
+// Exact head-count of error-free posts in the half-open window [from, to).
+async function countWindow(
+  projectId: string,
+  from: Date,
+  to: Date,
+): Promise<number> {
+  return count(
+    supabaseAdmin
+      .from("Post")
+      .select("*", { count: "exact", head: true })
+      .eq("projectId", projectId)
+      .is("error", null)
+      .gte("publishedAt", from.toISOString())
+      .lt("publishedAt", to.toISOString()),
+  );
+}
+
 export async function getAnalytics(projectId: string): Promise<AnalyticsSummary> {
   const now = Date.now();
   const from30 = new Date(now - 30 * 86_400_000);
   const from7 = new Date(now - 7 * 86_400_000);
   const from60 = new Date(now - 60 * 86_400_000);
 
-  const [posts, prevPosts, failureRows, spendAgg] = await Promise.all([
-    db.post.findMany({
-      where: { projectId, publishedAt: { gte: from30 } },
-      select: {
-        platform: true,
-        error: true,
-        publishedAt: true,
-        draft: { select: { topic: true } },
-      },
-    }),
-    db.post.count({
-      where: {
-        projectId,
-        error: null,
-        publishedAt: { gte: from60, lt: from30 },
-      },
-    }),
-    db.post.findMany({
-      where: { projectId, error: { not: null }, publishedAt: { gte: from30 } },
-      orderBy: { publishedAt: "desc" },
-      take: 6,
-      select: {
-        platform: true,
-        error: true,
-        publishedAt: true,
-        draft: { select: { topic: true } },
-      },
-    }),
-    db.draft.aggregate({
-      where: { projectId, createdAt: { gte: from30 } },
-      _sum: { costUsd: true, tokensInput: true, tokensOutput: true },
-    }),
+  // publishedAt comes back as an ISO string from supabase-js; `withDates`
+  // normalizes it to a Date so the rest of this function (hour buckets, day
+  // keys, window comparisons) is unchanged. `draft:Draft(topic)` is the
+  // nested-select form of the old `draft: { select: { topic } }`.
+  const [
+    postRows,
+    prevPosts,
+    failureRowsRaw,
+    spendAggRows,
+    totalPublished,
+    totalFailed,
+  ] = await Promise.all([
+    unwrap(
+      supabaseAdmin
+        .from("Post")
+        .select("platform, error, publishedAt, draft:Draft(topic)")
+        .eq("projectId", projectId)
+        .gte("publishedAt", from30.toISOString()),
+    ),
+    countWindow(projectId, from60, from30),
+    unwrap(
+      supabaseAdmin
+        .from("Post")
+        .select("platform, error, publishedAt, draft:Draft(topic)")
+        .eq("projectId", projectId)
+        .not("error", "is", null)
+        .gte("publishedAt", from30.toISOString())
+        .order("publishedAt", { ascending: false })
+        .limit(6),
+    ),
+    unwrap(supabaseAdmin.rpc("draft_spend_30d", { p_project_id: projectId })),
+    countPosts(projectId, "published"),
+    countPosts(projectId, "failed"),
   ]);
 
-  const totalPublished = await db.post.count({
-    where: { projectId, error: null },
-  });
-  const totalFailed = await db.post.count({
-    where: { projectId, error: { not: null } },
-  });
+  const posts = withDates(postRows, "publishedAt");
+  const failureRows = withDates(failureRowsRaw, "publishedAt");
+  const spendAgg = spendAggRows[0] ?? {
+    costUsd: 0,
+    tokensInput: 0,
+    tokensOutput: 0,
+  };
 
   const published7d = posts.filter((p) => !p.error && p.publishedAt >= from7).length;
   const published30d = posts.filter((p) => !p.error).length;
@@ -129,9 +164,9 @@ export async function getAnalytics(projectId: string): Promise<AnalyticsSummary>
     reason: p.error ?? "unknown",
   }));
 
-  const spend30dUsd = spendAgg._sum.costUsd ?? 0;
-  const tokensIn30d = spendAgg._sum.tokensInput ?? 0;
-  const tokensOut30d = spendAgg._sum.tokensOutput ?? 0;
+  const spend30dUsd = spendAgg.costUsd ?? 0;
+  const tokensIn30d = spendAgg.tokensInput ?? 0;
+  const tokensOut30d = spendAgg.tokensOutput ?? 0;
   const spendPerPostUsd =
     published30d > 0 ? spend30dUsd / published30d : null;
 

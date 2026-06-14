@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { unwrap } from "@/lib/supabase/queries";
 import { getCurrentUser, getCurrentProject } from "@/server/project";
 import { computeScheduleInfo } from "@/lib/schedule";
 import { relShort } from "@/lib/format";
@@ -17,17 +18,26 @@ export default async function TopicsPage({
   const settings = project.settings;
   const topicNames = settings?.topics ?? [];
 
-  const [drafts, schedule] = await Promise.all([
-    db.draft.findMany({
-      where: { projectId: project.id },
-      select: {
-        topic: true,
-        createdAt: true,
-        posts: { where: { error: null }, select: { id: true } },
-      },
-    }),
+  // `posts:Post(id)` with an error-null filter is the nested-select form of the
+  // old `posts: { where: { error: null }, select: { id } }`. createdAt comes
+  // back as an ISO string and is parsed to Date below.
+  const [draftsRaw, schedule] = await Promise.all([
+    unwrap(
+      supabaseAdmin
+        .from("Draft")
+        .select("topic, createdAt, posts:Post(id)")
+        .eq("projectId", project.id)
+        // Filter the embedded posts (by alias) to error-free ones; this trims the
+        // embedded array without dropping parent drafts (no inner join).
+        .is("posts.error", null),
+    ),
     computeScheduleInfo(project.id),
   ]);
+
+  const drafts = draftsRaw.map((d) => ({
+    ...d,
+    createdAt: new Date(d.createdAt),
+  }));
 
   const sevenDaysAgo = Date.now() - 7 * 86_400_000;
   const byTopic = new Map<
