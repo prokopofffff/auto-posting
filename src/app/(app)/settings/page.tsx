@@ -64,7 +64,7 @@ export default async function SettingsPage() {
           platform: c.platform,
           externalId: c.externalId,
           displayName: c.displayName,
-          expiresAt: c.expiresAt ? c.expiresAt.toISOString() : null,
+          expiresAt: c.expiresAt,
         })),
       }}
     />

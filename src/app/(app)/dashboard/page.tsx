@@ -4,7 +4,8 @@ import { Check, Plus } from "lucide-react";
 import { getCurrentUser, getCurrentProject } from "@/server/project";
 import { computeScheduleInfo } from "@/lib/schedule";
 import { relShort } from "@/lib/format";
-import { db } from "@/lib/db";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { count, unwrap, withDates } from "@/lib/supabase/queries";
 import { ExpiryBanner } from "@/components/expiry-banner";
 import { PlatformIcon } from "@/components/platform-icon";
 import { Sparkline } from "@/components/sparkline";
@@ -52,54 +53,72 @@ export default async function DashboardPage() {
   const since7d = new Date(now.getTime() - 7 * DAY_MS);
   const since14d = new Date(now.getTime() - 14 * DAY_MS);
 
+  // supabase-js returns timestamp columns as ISO strings; each query maps them
+  // back to Date at the boundary so the downstream bucketing/sparkline logic
+  // (which calls Date methods) is unchanged.
   const [
-    posts7d,
-    postsPrev7d,
-    drafts7d,
-    recentPosts,
-    recentDrafts,
+    posts7dRaw,
+    postsPrev7dCount,
+    drafts7dRaw,
+    recentPostsRaw,
+    recentDraftsRaw,
     totalPostsCount,
     schedule,
   ] = await Promise.all([
-      db.post.findMany({
-        where: { projectId: project.id, publishedAt: { gte: since7d } },
-        select: { publishedAt: true, error: true },
-      }),
-      db.post.count({
-        where: {
-          projectId: project.id,
-          publishedAt: { gte: since14d, lt: since7d },
-          error: null,
-        },
-      }),
-      db.draft.findMany({
-        where: { projectId: project.id, createdAt: { gte: since7d } },
-        select: { createdAt: true, topic: true },
-      }),
-      db.post.findMany({
-        where: { projectId: project.id },
-        orderBy: { publishedAt: "desc" },
-        take: 5,
-        select: {
-          id: true,
-          platform: true,
-          language: true,
-          content: true,
-          publishedAt: true,
-          error: true,
-        },
-      }),
-      db.draft.findMany({
-        where: { projectId: project.id },
-        orderBy: { createdAt: "desc" },
-        take: 5,
-        select: { id: true, topic: true, createdAt: true },
-      }),
-      db.post.count({
-        where: { projectId: project.id, error: null },
-      }),
+      unwrap(
+        supabaseAdmin
+          .from("Post")
+          .select("publishedAt, error")
+          .eq("projectId", project.id)
+          .gte("publishedAt", since7d.toISOString()),
+      ),
+      count(
+        supabaseAdmin
+          .from("Post")
+          .select("*", { count: "exact", head: true })
+          .eq("projectId", project.id)
+          .is("error", null)
+          .gte("publishedAt", since14d.toISOString())
+          .lt("publishedAt", since7d.toISOString()),
+      ),
+      unwrap(
+        supabaseAdmin
+          .from("Draft")
+          .select("createdAt, topic")
+          .eq("projectId", project.id)
+          .gte("createdAt", since7d.toISOString()),
+      ),
+      unwrap(
+        supabaseAdmin
+          .from("Post")
+          .select("id, platform, language, content, publishedAt, error")
+          .eq("projectId", project.id)
+          .order("publishedAt", { ascending: false })
+          .limit(5),
+      ),
+      unwrap(
+        supabaseAdmin
+          .from("Draft")
+          .select("id, topic, createdAt")
+          .eq("projectId", project.id)
+          .order("createdAt", { ascending: false })
+          .limit(5),
+      ),
+      count(
+        supabaseAdmin
+          .from("Post")
+          .select("*", { count: "exact", head: true })
+          .eq("projectId", project.id)
+          .is("error", null),
+      ),
       computeScheduleInfo(project.id),
     ]);
+
+  const posts7d = withDates(posts7dRaw, "publishedAt");
+  const postsPrev7d = postsPrev7dCount;
+  const drafts7d = withDates(drafts7dRaw, "createdAt");
+  const recentPosts = withDates(recentPostsRaw, "publishedAt");
+  const recentDrafts = withDates(recentDraftsRaw, "createdAt");
 
   const successful7d = posts7d.filter((p) => p.error === null);
   const failed7d = posts7d.filter((p) => p.error !== null);
@@ -214,13 +233,14 @@ export default async function DashboardPage() {
   }
   for (const a of project.connectedAccounts) {
     if (!a.expiresAt) continue;
-    const diffDays = Math.round((a.expiresAt.getTime() - now.getTime()) / DAY_MS);
+    const expiresAt = new Date(a.expiresAt);
+    const diffDays = Math.round((expiresAt.getTime() - now.getTime()) / DAY_MS);
     if (diffDays <= 30 && diffDays >= 0) {
       upcoming.push({
-        at: a.expiresAt.getTime(),
+        at: expiresAt.getTime(),
         in: `${diffDays}d`,
         what: "Token refresh",
-        where: `${a.platform.toLowerCase()} — expires ${a.expiresAt.toISOString().slice(0, 10)}`,
+        where: `${a.platform.toLowerCase()} — expires ${expiresAt.toISOString().slice(0, 10)}`,
       });
     }
   }
@@ -236,7 +256,7 @@ export default async function DashboardPage() {
           <div className="page-sub mono" style={{ fontSize: 11.5 }}>
             project_id <span className="muted-2">{project.id.slice(0, 10)}</span>
             {" · "}created{" "}
-            <span className="muted-2">{fmtDateShort(project.createdAt)}</span>
+            <span className="muted-2">{fmtDateShort(new Date(project.createdAt))}</span>
             {schedule && project.status === "ACTIVE" ? (
               <>
                 {" · "}next run in{" "}
@@ -264,7 +284,7 @@ export default async function DashboardPage() {
           id: c.id,
           platform: c.platform,
           displayName: c.displayName,
-          expiresAt: c.expiresAt,
+          expiresAt: c.expiresAt ? new Date(c.expiresAt) : null,
         }))}
       />
 
@@ -438,7 +458,7 @@ export default async function DashboardPage() {
                   const expiresIn = c.expiresAt
                     ? `expires in ${Math.max(
                         0,
-                        Math.round((c.expiresAt.getTime() - now.getTime()) / DAY_MS),
+                        Math.round((new Date(c.expiresAt).getTime() - now.getTime()) / DAY_MS),
                       )} days`
                     : "no expiry";
                   return (

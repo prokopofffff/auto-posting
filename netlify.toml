@@ -1,0 +1,19 @@
+# Netlify configuration.
+#
+# The official Netlify Next.js runtime (@netlify/plugin-nextjs) is detected and
+# installed automatically when a Next.js app is present — no [[plugins]] entry
+# is required. It compiles server actions and route handlers into Netlify
+# Functions (and Edge Functions where applicable). Prisma was removed during the
+# supabase-js migration, so the build is a plain `next build` with no
+# `prisma generate` prebuild step.
+
+[build]
+  # pnpm is the package manager (pnpm-lock.yaml is the source of truth). Netlify
+  # auto-detects pnpm from the lockfile and runs the install; the command below
+  # is the build step.
+  command = "pnpm build"
+  publish = ".next"
+
+[build.environment]
+  # Pin the Node major used for builds and functions. Keep in sync with .nvmrc.
+  NODE_VERSION = "22"

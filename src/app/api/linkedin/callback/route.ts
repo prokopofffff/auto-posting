@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
-import { db } from "@/lib/db";
+import { createClient } from "@/lib/supabase/server";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { unwrap } from "@/lib/supabase/queries";
+import { userOwnsProject } from "@/server/project";
 import { encrypt } from "@/lib/crypto";
 import { exchangeCode, fetchUserInfo, verifyState } from "@/lib/linkedin";
 
@@ -17,8 +19,11 @@ function fail(req: Request, message: string) {
 }
 
 export async function GET(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) return NextResponse.redirect(new URL("/sign-in", req.url));
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return NextResponse.redirect(new URL("/sign-in", req.url));
 
   const params = new URL(req.url).searchParams;
   const code = params.get("code");
@@ -29,13 +34,12 @@ export async function GET(req: Request) {
 
   const decoded = verifyState(state);
   if (!decoded) return fail(req, "Invalid state");
-  if (decoded.u !== session.user.id) return fail(req, "State/user mismatch");
+  if (decoded.u !== user.id) return fail(req, "State/user mismatch");
 
   const projectId = decoded.p;
-  const project = await db.project.findFirst({
-    where: { id: projectId, org: { members: { some: { userId: session.user.id } } } },
-  });
-  if (!project) return fail(req, "Project not found");
+  if (!(await userOwnsProject(user.id, projectId))) {
+    return fail(req, "Project not found");
+  }
 
   let tokens;
   try {
@@ -54,33 +58,29 @@ export async function GET(req: Request) {
   const urn = `urn:li:person:${info.sub}`;
   const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
 
-  await db.connectedAccount.upsert({
-    where: {
-      projectId_platform_externalId: {
+  // Composite unique key (projectId, platform, externalId) drives the upsert.
+  // displayName always resolves to a concrete value, so it is safe to apply on
+  // both insert and conflict (the old update kept the prior name only when
+  // info.name was null; the computed fallback below covers that case anyway).
+  await unwrap(
+    supabaseAdmin.from("ConnectedAccount").upsert(
+      {
         projectId,
         platform: "LINKEDIN",
         externalId: urn,
+        displayName:
+          info.name ??
+          (`${info.given_name ?? ""} ${info.family_name ?? ""}`.trim() || null),
+        accessToken: await encrypt(tokens.access_token),
+        refreshToken: tokens.refresh_token
+          ? await encrypt(tokens.refresh_token)
+          : null,
+        expiresAt: expiresAt.toISOString(),
+        meta: { scope: tokens.scope, memberId: info.sub, email: info.email, picture: info.picture },
       },
-    },
-    create: {
-      projectId,
-      platform: "LINKEDIN",
-      externalId: urn,
-      displayName:
-        info.name ?? (`${info.given_name ?? ""} ${info.family_name ?? ""}`.trim() || null),
-      accessToken: encrypt(tokens.access_token),
-      refreshToken: tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
-      expiresAt,
-      meta: { scope: tokens.scope, memberId: info.sub, email: info.email, picture: info.picture },
-    },
-    update: {
-      displayName: info.name ?? undefined,
-      accessToken: encrypt(tokens.access_token),
-      refreshToken: tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
-      expiresAt,
-      meta: { scope: tokens.scope, memberId: info.sub, email: info.email, picture: info.picture },
-    },
-  });
+      { onConflict: "projectId,platform,externalId" },
+    ),
+  );
 
   const url = new URL("/settings", req.url);
   url.searchParams.set("li_ok", "1");

@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { supabaseAdmin } from "@/lib/supabase/service";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    await db.$queryRaw`SELECT 1`;
+    // Cheap connectivity probe — a head count against a known table stands in
+    // for the old `SELECT 1` raw query.
+    const { error } = await supabaseAdmin
+      .from("Project")
+      .select("id", { count: "exact", head: true });
+    if (error) throw error;
     return NextResponse.json({ ok: true, ts: Date.now() });
   } catch (e) {
     return NextResponse.json(

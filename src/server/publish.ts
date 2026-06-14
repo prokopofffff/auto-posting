@@ -1,11 +1,12 @@
-import { db } from "@/lib/db";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { selectDraftWithProject, unwrap } from "@/lib/supabase/queries";
 import { decrypt } from "@/lib/crypto";
 import { buildPostUrl, sendMessage } from "@/lib/telegram";
 import { createPost as createLinkedInPost } from "@/lib/linkedin";
 import { getValidLinkedInAccessToken } from "@/server/linkedin-tokens";
 import { moderate } from "@/lib/moderation";
 import { withRetry } from "@/lib/retry";
-import type { ConnectedAccount, Platform } from "@prisma/client";
+import type { ConnectedAccount, Platform } from "@/lib/types";
 
 function recordPublishError(input: {
   projectId: string;
@@ -15,16 +16,16 @@ function recordPublishError(input: {
   content?: string;
   error: string;
 }) {
-  return db.post.create({
-    data: {
+  return unwrap(
+    supabaseAdmin.from("Post").insert({
       projectId: input.projectId,
       draftId: input.draftId,
       platform: input.platform,
       language: input.language,
       content: input.content ?? "",
       error: input.error,
-    },
-  });
+    }),
+  );
 }
 
 export type DraftContent = Record<string, string>; // lang -> text
@@ -61,7 +62,7 @@ async function publishToTelegram(
   if (!conn.accessToken) return null;
   const picked = pickPlatformContent(contentByPlatform, content, "TELEGRAM");
   if (!picked) return null;
-  const token = decrypt(conn.accessToken);
+  const token = await decrypt(conn.accessToken);
   try {
     const res = await withRetry(() =>
       sendMessage(token, conn.externalId, picked.text, {
@@ -69,8 +70,8 @@ async function publishToTelegram(
       }),
     );
     const url = buildPostUrl(res.chat, res.message_id);
-    await db.post.create({
-      data: {
+    await unwrap(
+      supabaseAdmin.from("Post").insert({
         projectId,
         draftId,
         platform: "TELEGRAM",
@@ -78,8 +79,8 @@ async function publishToTelegram(
         content: picked.text,
         externalId: String(res.message_id),
         externalUrl: url,
-      },
-    });
+      }),
+    );
     return { platform: "TELEGRAM" as const, language: picked.lang, url };
   } catch (e) {
     await recordPublishError({
@@ -121,8 +122,8 @@ async function publishToLinkedIn(
     const res = await withRetry(() =>
       createLinkedInPost(token, conn.externalId, picked.text),
     );
-    await db.post.create({
-      data: {
+    await unwrap(
+      supabaseAdmin.from("Post").insert({
         projectId,
         draftId,
         platform: "LINKEDIN",
@@ -130,8 +131,8 @@ async function publishToLinkedIn(
         content: picked.text,
         externalId: res.id || null,
         externalUrl: res.url,
-      },
-    });
+      }),
+    );
     return { platform: "LINKEDIN" as const, language: picked.lang, url: res.url };
   } catch (e) {
     await recordPublishError({
@@ -150,12 +151,7 @@ export async function publishDraft(draftId: string): Promise<
   | { ok: true; posts: Array<{ platform: string; language: string; url: string | null }> }
   | { ok: false; error: string }
 > {
-  const draft = await db.draft.findUnique({
-    where: { id: draftId },
-    include: {
-      project: { include: { connectedAccounts: true, settings: true } },
-    },
-  });
+  const { data: draft } = await selectDraftWithProject(supabaseAdmin, draftId);
   if (!draft) return { ok: false, error: "Draft not found." };
   if (draft.status === "PUBLISHED") return { ok: false, error: "Already published." };
 
@@ -171,25 +167,30 @@ export async function publishDraft(draftId: string): Promise<
     ];
     const mod = await moderate({
       texts: allTexts,
-      bannedWords: settings.bannedWords,
+      bannedWords: settings.bannedWords ?? [],
       moderationEnabled: settings.moderationEnabled,
     });
     if (!mod.allowed) {
       await recordPublishError({
         projectId: draft.projectId,
         draftId: draft.id,
-        platform: draft.targets[0] ?? "TELEGRAM",
+        platform: draft.targets?.[0] ?? "TELEGRAM",
         language: Object.keys(content)[0] ?? "en",
         error: `Blocked by safety check: ${mod.reason}`,
       });
-      await db.draft.update({ where: { id: draft.id }, data: { status: "FAILED" } });
+      await unwrap(
+        supabaseAdmin
+          .from("Draft")
+          .update({ status: "FAILED" })
+          .eq("id", draft.id),
+      );
       return { ok: false, error: `Blocked by safety check: ${mod.reason}` };
     }
   }
 
   const posts: Array<{ platform: string; language: string; url: string | null }> = [];
 
-  for (const platform of draft.targets) {
+  for (const platform of draft.targets ?? []) {
     const conns = draft.project.connectedAccounts.filter((c) => c.platform === platform);
     for (const conn of conns) {
       const pub =
@@ -202,10 +203,12 @@ export async function publishDraft(draftId: string): Promise<
     }
   }
 
-  await db.draft.update({
-    where: { id: draft.id },
-    data: { status: posts.length > 0 ? "PUBLISHED" : "FAILED" },
-  });
+  await unwrap(
+    supabaseAdmin
+      .from("Draft")
+      .update({ status: posts.length > 0 ? "PUBLISHED" : "FAILED" })
+      .eq("id", draft.id),
+  );
 
   if (posts.length === 0) return { ok: false, error: "No posts were published. Check connections." };
   return { ok: true, posts };

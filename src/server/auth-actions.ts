@@ -1,10 +1,8 @@
 "use server";
 
-import bcrypt from "bcryptjs";
 import { headers } from "next/headers";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { signIn } from "@/auth";
+import { createClient } from "@/lib/supabase/server";
 import {
   checkRateLimit,
   formatRetryAfter,
@@ -42,6 +40,10 @@ const signUpSchema = z.object({
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
+// Supabase Auth owns identity now (auth.users); the app-side public.User /
+// Organization rows are seeded by the on_auth_user_created trigger plus the
+// upsert-on-first-use in src/server/project.ts, so these actions only drive
+// supabase.auth.* and let the cookie-bound server client persist the session.
 export async function signUpAction(formData: FormData): Promise<ActionResult> {
   const parsed = signUpSchema.safeParse({
     name: formData.get("name"),
@@ -51,25 +53,23 @@ export async function signUpAction(formData: FormData): Promise<ActionResult> {
   if (!parsed.success) return { ok: false, error: "Invalid input. Email and 8+ char password required." };
 
   const { name, email, password } = parsed.data;
-  const existing = await db.user.findUnique({ where: { email } });
-  if (existing) return { ok: false, error: "An account with this email already exists." };
+  const supabase = await createClient();
 
-  const hashedPassword = await bcrypt.hash(password, 10);
-
-  const user = await db.user.create({
-    data: { email, name: name || null, hashedPassword },
+  // `name` rides along in user_metadata so the auth-user-sync trigger mirrors it
+  // into public.User.name (it reads the `name`/`full_name` keys).
+  const { error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: name ? { data: { name } } : undefined,
   });
-  const org = await db.organization.create({
-    data: { name: name ? `${name}'s workspace` : "My workspace", ownerId: user.id },
-  });
-  await db.organizationMember.create({
-    data: { orgId: org.id, userId: user.id, role: "OWNER" },
-  });
-
-  try {
-    await signIn("credentials", { email: user.email, password, redirect: false });
-  } catch {
-    // non-fatal — user can sign in manually
+  if (error) {
+    return {
+      ok: false,
+      error:
+        error.code === "user_already_exists"
+          ? "An account with this email already exists."
+          : error.message,
+    };
   }
   return { ok: true };
 }
@@ -83,31 +83,34 @@ export async function signInWithCredentialsAction(
   const ip = await getClientIp();
   const emailKey = email.trim().toLowerCase();
 
-  const ipCheck = checkRateLimit(ip, LOGIN_LIMIT_IP);
+  // Both checks are independent reads — run them together. IP still takes
+  // precedence in the returned message (checked first below).
+  const [ipCheck, emailCheck] = await Promise.all([
+    checkRateLimit(ip, LOGIN_LIMIT_IP),
+    emailKey ? checkRateLimit(emailKey, LOGIN_LIMIT_EMAIL) : null,
+  ]);
   if (!ipCheck.allowed) {
     return {
       ok: false,
       error: `Too many sign-in attempts. Try again in ${formatRetryAfter(ipCheck.retryAfterMs)}.`,
     };
   }
-  if (emailKey) {
-    const emailCheck = checkRateLimit(emailKey, LOGIN_LIMIT_EMAIL);
-    if (!emailCheck.allowed) {
-      return {
-        ok: false,
-        error: `Too many sign-in attempts for this account. Try again in ${formatRetryAfter(emailCheck.retryAfterMs)}.`,
-      };
-    }
+  if (emailCheck && !emailCheck.allowed) {
+    return {
+      ok: false,
+      error: `Too many sign-in attempts for this account. Try again in ${formatRetryAfter(emailCheck.retryAfterMs)}.`,
+    };
   }
 
-  try {
-    await signIn("credentials", { email, password, redirect: false });
-    recordSuccess(ip, LOGIN_LIMIT_IP);
-    if (emailKey) recordSuccess(emailKey, LOGIN_LIMIT_EMAIL);
-    return { ok: true };
-  } catch {
-    recordFailure(ip, LOGIN_LIMIT_IP);
-    if (emailKey) recordFailure(emailKey, LOGIN_LIMIT_EMAIL);
+  const supabase = await createClient();
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    await recordFailure(ip, LOGIN_LIMIT_IP);
+    if (emailKey) await recordFailure(emailKey, LOGIN_LIMIT_EMAIL);
     return { ok: false, error: "Invalid email or password." };
   }
+
+  await recordSuccess(ip, LOGIN_LIMIT_IP);
+  if (emailKey) await recordSuccess(emailKey, LOGIN_LIMIT_EMAIL);
+  return { ok: true };
 }

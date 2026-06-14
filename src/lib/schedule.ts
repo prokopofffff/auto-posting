@@ -1,4 +1,5 @@
-import { db } from "@/lib/db";
+import { supabaseAdmin } from "@/lib/supabase/service";
+import { selectProjectWithRelations } from "@/lib/supabase/queries";
 
 export type ScheduleInfo = {
   lastAt: Date | null;
@@ -70,20 +71,24 @@ function nextRunForHour(
 }
 
 export async function computeScheduleInfo(projectId: string): Promise<ScheduleInfo | null> {
-  const project = await db.project.findUnique({
-    where: { id: projectId },
-    include: { settings: true },
-  });
+  const { data: project } = await selectProjectWithRelations(
+    supabaseAdmin,
+    projectId,
+  );
   if (!project?.settings) return null;
 
-  const lastPost = await db.post.findFirst({
-    where: { projectId, error: null },
-    orderBy: { publishedAt: "desc" },
-    select: { publishedAt: true },
-  });
+  const { data: lastPost } = await supabaseAdmin
+    .from("Post")
+    .select("publishedAt")
+    .eq("projectId", projectId)
+    .is("error", null)
+    .order("publishedAt", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   const { intervalDays, preferredHour, timezone, skipDays } = project.settings;
-  const lastAt = lastPost?.publishedAt ?? null;
+  // publishedAt is an ISO string from supabase-js; parse to a Date for the math.
+  const lastAt = lastPost?.publishedAt ? new Date(lastPost.publishedAt) : null;
   const baseline = lastAt
     ? new Date(lastAt.getTime() + intervalDays * 86_400_000 - 86_400_000)
     : new Date();

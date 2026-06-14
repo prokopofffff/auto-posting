@@ -1,0 +1,10 @@
+{
+  "//": "Deno config for Supabase Edge Functions. The Next/Netlify app is typechecked by the root tsconfig.json (which excludes this directory); these functions run on the Deno-based Edge runtime and pin their npm deps here.",
+  "imports": {
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2.108.1",
+    "@anthropic-ai/sdk": "npm:@anthropic-ai/sdk@0.90.0"
+  },
+  "compilerOptions": {
+    "lib": ["deno.window", "dom", "dom.iterable"]
+  }
+}
