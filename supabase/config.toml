@@ -301,6 +301,14 @@ enabled = false
 # Obtain from https://clerk.com/setup/supabase
 # domain = "example.clerk.accounts.dev"
 
+# Scheduled content worker. verify_jwt=false because the function gates on
+# CRON_SECRET itself (not a user JWT); import_map points at the shared deno.json
+# so bare specifiers like "@supabase/supabase-js" resolve during bundling.
+[functions.tick]
+enabled = true
+verify_jwt = false
+import_map = "./functions/deno.json"
+
 [edge_runtime]
 enabled = true
 # Configure one of the supported request policies: `oneshot`, `per_worker`.
