@@ -8,7 +8,7 @@ import {
   type PostgrestSingleResponse,
   type QueryData,
   type SupabaseClient,
-} from "@supabase/supabase-js";
+} from "npm:@supabase/supabase-js@2.108.1";
 import type { Database } from "./database.types.ts";
 
 export type DB = SupabaseClient<Database>;
