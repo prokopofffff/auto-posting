@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Anthropic from "npm:@anthropic-ai/sdk@0.90.0";
 import type { FactCheck, NewsItem } from "./news-types.ts";
 
 const MODEL = "claude-opus-4-7";
