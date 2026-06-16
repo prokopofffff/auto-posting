@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
-import { Button } from "@/components/ui/button";
 
 export type ExpiringConnection = {
   id: string;
@@ -37,37 +36,47 @@ export function ExpiryBanner({
   const expired = expMs < now;
   const daysLeft = Math.max(0, Math.round((expMs - now) / 86_400_000));
 
+  // Error (expired) vs warn (expiring soon) — both drawn from design tokens,
+  // matching the .auth-error / .badge-pill.err|warn treatment used elsewhere.
+  const tint = expired
+    ? { border: "rgba(248,113,113,0.3)", bg: "rgba(248,113,113,0.08)", fg: "var(--err)" }
+    : { border: "rgba(250,204,21,0.3)", bg: "rgba(250,204,21,0.08)", fg: "var(--warn)" };
+
   return (
     <div
-      className={`flex items-start gap-3 rounded-md border p-4 ${
-        expired
-          ? "border-destructive/40 bg-destructive/5"
-          : "border-amber-400/40 bg-amber-500/5"
-      }`}
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        padding: "12px 14px",
+        border: `1px solid ${tint.border}`,
+        background: tint.bg,
+        borderRadius: "var(--r-2)",
+      }}
     >
       <AlertTriangle
-        className={`size-5 flex-none ${
-          expired ? "text-destructive" : "text-amber-600 dark:text-amber-500"
-        }`}
+        size={16}
+        style={{ flex: "none", marginTop: 1, color: tint.fg }}
       />
-      <div className="flex-1 text-sm">
-        <div className="font-medium">
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 500 }}>
           {expired
             ? "Your LinkedIn connection has expired."
             : `LinkedIn connection expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}.`}
         </div>
-        <p className="text-muted-foreground">
+        <p className="muted" style={{ fontSize: 12, marginTop: 2, marginBottom: 0 }}>
           {expired
             ? "Reconnect now — posts to LinkedIn will fail until you do."
             : "LinkedIn tokens last 60 days. Reconnect now to avoid an interruption."}
           {relevant.length > 1 ? ` (${relevant.length} connections affected)` : ""}
         </p>
       </div>
-      <Button asChild size="sm" variant={expired ? "default" : "outline"}>
-        <Link href={`/api/linkedin/authorize?projectId=${projectId}`}>
-          {expired ? "Reconnect LinkedIn" : "Reconnect now"}
-        </Link>
-      </Button>
+      <Link
+        className={"btn sm" + (expired ? " accent" : "")}
+        href={`/api/linkedin/authorize?projectId=${projectId}`}
+      >
+        {expired ? "Reconnect LinkedIn" : "Reconnect now"}
+      </Link>
     </div>
   );
 }
