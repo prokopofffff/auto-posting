@@ -4,7 +4,7 @@ import { decrypt } from "@/lib/crypto";
 import { buildPostUrl, sendMessage } from "@/lib/telegram";
 import { createPost as createLinkedInPost } from "@/lib/linkedin";
 import { getValidLinkedInAccessToken } from "@/server/linkedin-tokens";
-import { moderate } from "@/lib/moderation";
+import { invokeEdge } from "@/server/edge";
 import { withRetry } from "@/lib/retry";
 import type { ConnectedAccount, Platform } from "@/lib/types";
 
@@ -160,14 +160,21 @@ export async function publishDraft(draftId: string): Promise<
     (draft.contentByPlatform as DraftContentByPlatform | null) ?? null;
 
   const settings = draft.project.settings;
-  if (settings) {
+  const bannedWords = settings?.bannedWords ?? [];
+  // Skip the edge round-trip entirely when there's nothing to moderate.
+  if (settings && (bannedWords.length > 0 || settings.moderationEnabled)) {
     const allTexts = [
       ...Object.values(content),
       ...Object.values(contentByPlatform ?? {}).flatMap((v) => Object.values(v ?? {})),
     ];
-    const mod = await moderate({
+    // Moderation (banned-word + optional AI check) runs in the edge function,
+    // using this project's own Claude credential for the AI pass.
+    const mod = await invokeEdge<
+      { allowed: true } | { allowed: false; reason: string }
+    >("moderate", {
+      projectId: draft.projectId,
       texts: allTexts,
-      bannedWords: settings.bannedWords ?? [],
+      bannedWords,
       moderationEnabled: settings.moderationEnabled,
     });
     if (!mod.allowed) {

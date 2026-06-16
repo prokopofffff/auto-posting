@@ -1,15 +1,12 @@
 import Anthropic from "npm:@anthropic-ai/sdk@0.90.0";
 import type { FactCheck, NewsItem } from "./news-types.ts";
+import { CLAUDE_CODE_PREAMBLE, type ResolvedClaude } from "./ai-credentials.ts";
 
-const MODEL = "claude-opus-4-7";
-
-const OAUTH_BETA_HEADER = "oauth-2025-04-20";
-const CLAUDE_CODE_PREAMBLE =
-  "You are Claude Code, Anthropic's official CLI for Claude.";
-
-// Default pricing for claude-opus-4-7 — override via env if your contract differs.
-const DEFAULT_INPUT_USD_PER_MTOK = 15;
-const DEFAULT_OUTPUT_USD_PER_MTOK = 75;
+// Pricing is telemetry only (the cost estimate stored on the draft) and is
+// independent of which credential is used — override per-MTok via env if your
+// contract differs. Defaults approximate a mid-tier model.
+const DEFAULT_INPUT_USD_PER_MTOK = 5;
+const DEFAULT_OUTPUT_USD_PER_MTOK = 25;
 
 function pricingPerMTok(): { input: number; output: number } {
   const input = Number(
@@ -28,32 +25,8 @@ function computeCostUsd(tokensInput: number, tokensOutput: number): number {
   );
 }
 
-type ClientMode = { client: Anthropic; oauth: boolean };
-
-let _client: ClientMode | null = null;
-function client(): ClientMode {
-  if (!_client) {
-    const oauthToken = Deno.env.get("CLAUDE_CODE_OAUTH_TOKEN");
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
-    if (oauthToken) {
-      _client = {
-        client: new Anthropic({
-          authToken: oauthToken,
-          apiKey: null,
-          defaultHeaders: { "anthropic-beta": OAUTH_BETA_HEADER },
-        }),
-        oauth: true,
-      };
-    } else if (apiKey) {
-      _client = { client: new Anthropic(), oauth: false };
-    } else {
-      throw new Error(
-        "Set CLAUDE_CODE_OAUTH_TOKEN (run `claude setup-token`) or ANTHROPIC_API_KEY",
-      );
-    }
-  }
-  return _client;
-}
+// The Anthropic client + model now come from the per-project credential
+// resolver (./ai-credentials.ts), passed in by callers — no env-based singleton.
 
 const STYLE_DIRECTIVES: Record<string, string> = {
   professional:
@@ -209,22 +182,26 @@ function extractJson(text: string): unknown {
 }
 
 async function callModel(
+  resolved: ResolvedClaude,
   systemText: string,
   userText: string,
   maxTokens: number,
 ) {
-  const c = client();
   const systemBlocks: Anthropic.TextBlockParam[] = [];
-  if (c.oauth) systemBlocks.push({ type: "text", text: CLAUDE_CODE_PREAMBLE });
+  if (resolved.oauth) {
+    systemBlocks.push({ type: "text", text: CLAUDE_CODE_PREAMBLE });
+  }
   systemBlocks.push({
     type: "text",
     text: systemText,
     cache_control: { type: "ephemeral" },
   });
-  const response = await c.client.messages.create({
-    model: MODEL,
+  // No `thinking` / `effort` / sampling params: the model is user-selectable
+  // (default Haiku), and omitting these keeps the call valid across every model
+  // the picker can offer — including ones that 400 on adaptive thinking.
+  const response = await resolved.client.messages.create({
+    model: resolved.model,
     max_tokens: maxTokens,
-    thinking: { type: "adaptive" },
     system: systemBlocks,
     messages: [{ role: "user", content: userText }],
   });
@@ -243,7 +220,10 @@ async function callModel(
   return { text, tokensInput, tokensOutput };
 }
 
-export async function generatePost(input: GenerateInput): Promise<GenerationResult> {
+export async function generatePost(
+  input: GenerateInput,
+  resolved: ResolvedClaude,
+): Promise<GenerationResult> {
   const { article, ...rest } = input;
   const system = buildSystemPrompt(rest);
   const userMsg = [
@@ -260,6 +240,7 @@ export async function generatePost(input: GenerateInput): Promise<GenerationResu
     .join("\n");
 
   const { text, tokensInput, tokensOutput } = await callModel(
+    resolved,
     system,
     userMsg,
     input.voiceMode === "PER_PLATFORM" ? 4000 : 2000,
@@ -336,7 +317,10 @@ export type AdHocResult = {
   costUsd: number;
 };
 
-export async function generateAdHocPost(input: AdHocInput): Promise<AdHocResult> {
+export async function generateAdHocPost(
+  input: AdHocInput,
+  resolved: ResolvedClaude,
+): Promise<AdHocResult> {
   const styleBody =
     input.tone === "custom"
       ? `Voice: custom. Follow these instructions exactly:\n${input.customStyle ?? ""}`
@@ -378,7 +362,7 @@ export async function generateAdHocPost(input: AdHocInput): Promise<AdHocResult>
     .filter(Boolean)
     .join("\n");
 
-  const { text, tokensInput, tokensOutput } = await callModel(system, userMsg, 1500);
+  const { text, tokensInput, tokensOutput } = await callModel(resolved, system, userMsg, 1500);
   const parsed = extractJson(text) as { content?: string };
   if (!parsed.content) throw new Error("Model response missing 'content'.");
   return {

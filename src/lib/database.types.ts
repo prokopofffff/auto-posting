@@ -34,6 +34,63 @@ export type Database = {
   }
   public: {
     Tables: {
+      AiCredential: {
+        Row: {
+          apiKey: string | null
+          createdAt: string
+          createdBy: string | null
+          id: string
+          mode: Database["public"]["Enums"]["AiCredentialMode"]
+          model: string | null
+          oauthAccessToken: string | null
+          oauthExpiresAt: string | null
+          oauthRefreshToken: string | null
+          projectId: string
+          updatedAt: string
+        }
+        Insert: {
+          apiKey?: string | null
+          createdAt?: string
+          createdBy?: string | null
+          id?: string
+          mode?: Database["public"]["Enums"]["AiCredentialMode"]
+          model?: string | null
+          oauthAccessToken?: string | null
+          oauthExpiresAt?: string | null
+          oauthRefreshToken?: string | null
+          projectId: string
+          updatedAt?: string
+        }
+        Update: {
+          apiKey?: string | null
+          createdAt?: string
+          createdBy?: string | null
+          id?: string
+          mode?: Database["public"]["Enums"]["AiCredentialMode"]
+          model?: string | null
+          oauthAccessToken?: string | null
+          oauthExpiresAt?: string | null
+          oauthRefreshToken?: string | null
+          projectId?: string
+          updatedAt?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "AiCredential_projectId_fkey"
+            columns: ["projectId"]
+            isOneToOne: true
+            referencedRelation: "Project"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "AiCredential_createdBy_fkey"
+            columns: ["createdBy"]
+            isOneToOne: false
+            referencedRelation: "User"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ConnectedAccount: {
         Row: {
           accessToken: string | null
@@ -501,6 +558,7 @@ export type Database = {
       }
     }
     Enums: {
+      AiCredentialMode: "API_KEY" | "SUBSCRIPTION"
       DraftStatus:
         | "PENDING"
         | "APPROVED"
@@ -645,6 +703,7 @@ export const Constants = {
   },
   public: {
     Enums: {
+      AiCredentialMode: ["API_KEY", "SUBSCRIPTION"],
       DraftStatus: [
         "PENDING",
         "APPROVED",

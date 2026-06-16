@@ -1,29 +1,35 @@
-// Supabase Edge Function `tick` — the scheduled content worker.
+// Supabase Edge Function `tick` — the single Claude/generation runtime.
 //
-// Replaces the old Netlify /api/cron/tick route (src/app/api/cron/tick/route.ts):
-// pg_cron + pg_net invoke THIS function on a schedule (see madrid-9i8.11), so the
-// pipeline no longer round-trips back into the Next app. It runs entirely on the
-// Deno Edge runtime against the database via supabase-js (service role).
+// pg_cron + pg_net invoke this on a schedule (the default `tick` action). The
+// Next app ALSO calls this function over HTTP for every Claude-backed action
+// ("Generate now", ad-hoc compose, the model picker, moderation) via
+// src/server/edge.ts — so generation logic and per-project credential handling
+// live here once, not duplicated in the Node runtime.
 //
-// Auth: callers must present the CRON_SECRET as `Authorization: Bearer <secret>`
-// or `?secret=<secret>`.
+// Auth: callers present CRON_SECRET as `Authorization: Bearer <secret>` or
+// `?secret=<secret>`. The Next app holds CRON_SECRET server-side and calls
+// these actions only AFTER verifying the signed-in user owns the project, so
+// per-project credential isolation is enforced before the request ever arrives.
 //
-// ── HUMAN FOLLOW-UPS (need live infra; cannot be done in this sandbox) ───────
+// ── HUMAN FOLLOW-UPS (need live infra) ───────────────────────────────────────
 //  1. Deploy:   supabase functions deploy tick --no-verify-jwt
-//     (--no-verify-jwt because we gate on CRON_SECRET ourselves, not a user JWT.)
-//  2. Secrets:  supabase secrets set CRON_SECRET=... ANTHROPIC_API_KEY=... \
-//                 ENCRYPTION_KEY=... LINKEDIN_CLIENT_ID=... \
-//                 LINKEDIN_CLIENT_SECRET=... [NEWSAPI_KEY=...]
+//  2. Secrets:  supabase secrets set CRON_SECRET=... ENCRYPTION_KEY=... \
+//                 LINKEDIN_CLIENT_ID=... LINKEDIN_CLIENT_SECRET=... [NEWSAPI_KEY=...]
 //     ENCRYPTION_KEY must be byte-identical to the app's so stored tokens decrypt.
-//     SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are injected by the platform.
-//     NOTE: TELEGRAM_BOT_TOKEN is NOT read here — the Telegram token is stored
-//     per-ConnectedAccount (encrypted) and decrypted at publish time, matching
-//     the app. Only set it if a future code path needs a global bot token.
-//  3. Schedule (this is madrid-9i8.11): from SQL enable pg_cron + pg_net and
-//     schedule an http_post to <project>.functions.supabase.co/tick carrying the
-//     `Authorization: Bearer <CRON_SECRET>` header on the desired cadence.
+//     NOTE: ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN are NO LONGER read here —
+//     Claude credentials are stored per-project (encrypted) in AiCredential and
+//     resolved at use time. There is no shared/global key.
+//  3. Schedule: from SQL enable pg_cron + pg_net and schedule an http_post to
+//     <project>.functions.supabase.co/tick with the Bearer CRON_SECRET header.
 // ─────────────────────────────────────────────────────────────────────────────
-import { publishDueScheduledDrafts, runPipelineForAllDue } from "./lib/pipeline.ts";
+import {
+  publishDueScheduledDrafts,
+  runPipelineForAllDue,
+  runPipelineForProject,
+} from "./lib/pipeline.ts";
+import { generateAdHocPost, type AdHocInput } from "./lib/claude.ts";
+import { listModels, resolveClaude } from "./lib/ai-credentials.ts";
+import { moderate, type ModerationInput } from "./lib/moderation.ts";
 
 function isAuthorized(req: Request): boolean {
   const secret = Deno.env.get("CRON_SECRET");
@@ -41,25 +47,87 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+type Body = {
+  action?: "tick" | "generate" | "compose" | "list-models" | "moderate";
+  projectId?: string;
+  input?: AdHocInput;
+} & Partial<ModerationInput>;
+
+// The scheduled fan-out: run all due projects + flush due scheduled drafts.
+async function runTick(started: number): Promise<Response> {
+  const [pipeline, scheduled] = await Promise.all([
+    runPipelineForAllDue(),
+    publishDueScheduledDrafts(),
+  ]);
+  return json({
+    ok: true,
+    ...pipeline,
+    scheduledPublished: scheduled.published,
+    scheduledErrors: scheduled.errors,
+    ms: Date.now() - started,
+  });
+}
+
 Deno.serve(async (req: Request) => {
   if (!isAuthorized(req)) {
     return json({ ok: false, error: "unauthorized" }, 401);
   }
   const started = Date.now();
+
+  // A bodyless POST/GET (pg_cron) parses to {} → the default "tick" action,
+  // preserving the original scheduled behavior.
+  let body: Body = {};
   try {
-    // Same fan-out as the old route: run all due projects and flush any drafts
-    // whose scheduledAt has passed, concurrently.
-    const [pipeline, scheduled] = await Promise.all([
-      runPipelineForAllDue(),
-      publishDueScheduledDrafts(),
-    ]);
-    return json({
-      ok: true,
-      ...pipeline,
-      scheduledPublished: scheduled.published,
-      scheduledErrors: scheduled.errors,
-      ms: Date.now() - started,
-    });
+    if (req.headers.get("content-type")?.includes("application/json")) {
+      body = (await req.json()) as Body;
+    }
+  } catch {
+    body = {};
+  }
+
+  const action = body.action ?? "tick";
+  try {
+    switch (action) {
+      case "tick":
+        return await runTick(started);
+
+      case "generate": {
+        if (!body.projectId) return json({ ok: false, error: "projectId required" }, 400);
+        const res = await runPipelineForProject(body.projectId);
+        return json(res);
+      }
+
+      case "compose": {
+        if (!body.projectId || !body.input) {
+          return json({ ok: false, error: "projectId and input required" }, 400);
+        }
+        const resolved = await resolveClaude(body.projectId);
+        const result = await generateAdHocPost(body.input, resolved);
+        return json({ ok: true, ...result });
+      }
+
+      case "list-models": {
+        if (!body.projectId) return json({ ok: false, error: "projectId required" }, 400);
+        const { models, live } = await listModels(body.projectId);
+        return json({ ok: true, models, live });
+      }
+
+      case "moderate": {
+        if (!body.projectId || !body.texts) {
+          return json({ ok: false, error: "projectId and texts required" }, 400);
+        }
+        const result = await moderate({
+          texts: body.texts,
+          bannedWords: body.bannedWords ?? [],
+          moderationEnabled: body.moderationEnabled ?? false,
+          projectId: body.projectId,
+        });
+        return json({ ok: true, ...result });
+      }
+
+      default:
+        return json({ ok: false, error: `unknown action: ${action}` }, 400);
+    }
   } catch (e) {
     return json({ ok: false, error: (e as Error).message }, 500);
   }

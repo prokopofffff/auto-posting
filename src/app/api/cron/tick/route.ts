@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
-import { publishDueScheduledDrafts, runPipelineForAllDue } from "@/server/pipeline";
+import { runTick } from "@/server/pipeline";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 min — plenty for fan-out
 
+// Manual fallback trigger. Production scheduling is pg_cron → the edge function
+// directly; this route just forwards to the same edge "tick" action so there's
+// one pipeline. Gate on CRON_SECRET exactly as before.
 function isAuthorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
   const auth = req.headers.get("authorization");
   if (auth === `Bearer ${secret}`) return true;
-  // Vercel Cron also passes the header, but users can also hit manually
   const q = new URL(req.url).searchParams.get("secret");
   return q === secret;
 }
@@ -18,19 +20,9 @@ export async function GET(req: Request) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
-  const started = Date.now();
   try {
-    const [pipeline, scheduled] = await Promise.all([
-      runPipelineForAllDue(),
-      publishDueScheduledDrafts(),
-    ]);
-    return NextResponse.json({
-      ok: true,
-      ...pipeline,
-      scheduledPublished: scheduled.published,
-      scheduledErrors: scheduled.errors,
-      ms: Date.now() - started,
-    });
+    const result = await runTick();
+    return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json(
       { ok: false, error: (e as Error).message },
