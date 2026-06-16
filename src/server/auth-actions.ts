@@ -3,6 +3,7 @@
 import { headers } from "next/headers";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
+import { supabaseAdmin } from "@/lib/supabase/service";
 import {
   checkRateLimit,
   formatRetryAfter,
@@ -55,22 +56,41 @@ export async function signUpAction(formData: FormData): Promise<ActionResult> {
   const { name, email, password } = parsed.data;
   const supabase = await createClient();
 
-  // `name` rides along in user_metadata so the auth-user-sync trigger mirrors it
-  // into public.User.name (it reads the `name`/`full_name` keys).
-  const { error } = await supabase.auth.signUp({
+  // Email verification is disabled for now. We deliberately do NOT use the
+  // public `auth.signUp` flow: when the project has "Confirm email" enabled (the
+  // production setting), signUp SENDS a verification email and withholds a
+  // session until the user clicks the link. Instead we create the account
+  // already confirmed via the service role — Supabase never sends a verification
+  // email and never gates sign-in, regardless of the project toggle.
+  //
+  // The on_auth_user_created trigger still seeds public.User; `name` rides in
+  // user_metadata so that trigger mirrors it into public.User.name.
+  const { error: createError } = await supabaseAdmin.auth.admin.createUser({
     email,
     password,
-    options: name ? { data: { name } } : undefined,
+    email_confirm: true,
+    user_metadata: name ? { name } : undefined,
   });
-  if (error) {
+  if (createError) {
+    const alreadyExists =
+      createError.code === "email_exists" ||
+      createError.status === 422 ||
+      /already (been )?registered|already exists/i.test(createError.message);
     return {
       ok: false,
-      error:
-        error.code === "user_already_exists"
-          ? "An account with this email already exists."
-          : error.message,
+      error: alreadyExists
+        ? "An account with this email already exists."
+        : createError.message,
     };
   }
+
+  // Establish a cookie-bound session so the caller lands on /dashboard.
+  const { error: signInError } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+  if (signInError) return { ok: false, error: signInError.message };
+
   return { ok: true };
 }
 

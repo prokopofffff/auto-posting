@@ -696,25 +696,25 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
                 </div>
               )}
 
-              <div className="row">
+              <div className="dash-row">
                 <div>
                   <div className="title">Include hashtags</div>
                   <div className="sub">auto-generate 3–5 relevant hashtags at the end.</div>
                 </div>
                 <div
-                  className={"toggle" + (includeHashtags ? " on" : "")}
+                  className={"toggle right" + (includeHashtags ? " on" : "")}
                   onClick={() => setIncludeHashtags(!includeHashtags)}
                   role="switch"
                   aria-checked={includeHashtags}
                 />
               </div>
-              <div className="row">
+              <div className="dash-row">
                 <div>
                   <div className="title">Include source link</div>
                   <div className="sub">append the article URL (first comment on LinkedIn).</div>
                 </div>
                 <div
-                  className={"toggle" + (includeSource ? " on" : "")}
+                  className={"toggle right" + (includeSource ? " on" : "")}
                   onClick={() => setIncludeSource(!includeSource)}
                   role="switch"
                   aria-checked={includeSource}
@@ -835,7 +835,7 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
                       />
                     </div>
 
-                    <div className="row">
+                    <div className="dash-row">
                       <div>
                         <div className="title">Include hashtags</div>
                         <div className="sub">
@@ -845,7 +845,7 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
                         </div>
                       </div>
                       <div
-                        className={"toggle" + (cfg.includeHashtags ? " on" : "")}
+                        className={"toggle right" + (cfg.includeHashtags ? " on" : "")}
                         onClick={() =>
                           update({ includeHashtags: !cfg.includeHashtags })
                         }
@@ -853,7 +853,7 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
                         aria-checked={cfg.includeHashtags}
                       />
                     </div>
-                    <div className="row">
+                    <div className="dash-row">
                       <div>
                         <div className="title">Include source link</div>
                         <div className="sub">
@@ -863,7 +863,7 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
                         </div>
                       </div>
                       <div
-                        className={"toggle" + (cfg.includeSource ? " on" : "")}
+                        className={"toggle right" + (cfg.includeSource ? " on" : "")}
                         onClick={() =>
                           update({ includeSource: !cfg.includeSource })
                         }
@@ -1085,7 +1085,7 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
             </div>
           </div>
 
-          <div className="row">
+          <div className="dash-row">
             <div>
               <div className="title">AI moderation</div>
               <div className="sub">
@@ -1094,7 +1094,7 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
               </div>
             </div>
             <div
-              className={"toggle" + (moderationEnabled ? " on" : "")}
+              className={"toggle right" + (moderationEnabled ? " on" : "")}
               onClick={() => setModerationEnabled(!moderationEnabled)}
               role="switch"
               aria-checked={moderationEnabled}

@@ -48,6 +48,8 @@ export function AiPanel({
   // Subscription PKCE round-trip (verifier/state held client-side per PKCE)
   const [pkce, setPkce] = useState<{ verifier: string; state: string } | null>(null);
   const [code, setCode] = useState("");
+  // Fallback authorize URL, surfaced as a manual link if the popup is blocked.
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
 
   // Models (loaded live from the connected credential)
   const [models, setModels] = useState<{ id: string; displayName: string }[]>([]);
@@ -111,15 +113,36 @@ export function AiPanel({
   }
 
   function beginSubscriptionLogin() {
+    // Open the tab synchronously, while we still hold the click's user
+    // activation. If we waited for the server round-trip below to finish before
+    // calling window.open(), the browser would treat it as a programmatic popup
+    // and silently block it — which looked like "nothing happens, no redirect".
+    // (No "noopener" here so we keep the handle to point it at the real URL;
+    // we null the opener ourselves once the trusted destination is set.)
+    const popup = window.open("about:blank", "_blank");
     startTransition(async () => {
       const res = await startClaudeLoginAction(projectId);
       if (!res.ok) {
+        popup?.close();
         toast.error(res.error);
         return;
       }
       setPkce({ verifier: res.verifier, state: res.state });
-      window.open(res.url, "_blank", "noopener,noreferrer");
-      toast.info("Approve in the new tab, then paste the code below.");
+      if (popup && !popup.closed) {
+        try {
+          popup.opener = null;
+        } catch {
+          // cross-origin once navigated; best-effort only
+        }
+        popup.location.replace(res.url);
+        setLoginUrl(null);
+        toast.info("Approve in the new tab, then paste the code below.");
+      } else {
+        // Popup blocked despite the synchronous open — keep the verifier/state
+        // alive and offer a manual link instead of dropping the flow.
+        setLoginUrl(res.url);
+        toast.info("Popup blocked — use the “Open Claude login” link below.");
+      }
     });
   }
 
@@ -146,6 +169,7 @@ export function AiPanel({
       toast.success("Claude Max subscription connected.");
       setCode("");
       setPkce(null);
+      setLoginUrl(null);
       router.refresh();
     });
   }
@@ -194,7 +218,7 @@ export function AiPanel({
     <div style={{ maxWidth: 760 }}>
       <div
         className="dash-card"
-        style={{ borderColor: "rgba(217,119,87,0.3)", marginBottom: 16 }}
+        style={{ borderColor: "var(--accent-bg)", marginBottom: 16 }}
       >
         <div className="dash-card-sub" style={{ padding: 12 }}>
           <strong>For testing.</strong> Connect this project&apos;s own Claude credential — an
@@ -289,6 +313,20 @@ export function AiPanel({
           >
             <ExternalLink size={13} /> Open Claude login
           </button>
+          {loginUrl && (
+            <div className="field-help" style={{ marginTop: 8 }}>
+              Popup blocked.{" "}
+              <a
+                href={loginUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "var(--accent)", textDecoration: "underline" }}
+              >
+                Open Claude login manually
+              </a>
+              .
+            </div>
+          )}
           {pkce && (
             <div style={{ marginTop: 10 }}>
               <input

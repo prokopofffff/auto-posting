@@ -3,22 +3,13 @@
 import { useEffect, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Share2, Send, Trash2 } from "lucide-react";
 import {
   connectTelegramAction,
   disconnectAccountAction,
 } from "@/server/connection-actions";
+
+const CARD_TITLE_STYLE = { display: "flex", alignItems: "center", gap: 6 } as const;
 
 export type ConnectedRow = {
   id: string;
@@ -91,21 +82,22 @@ export function ConnectionsPanel({
   const linkedinConns = connections.filter((c) => c.platform === "LINKEDIN");
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Share2 className="size-4" />
-            LinkedIn
-          </CardTitle>
-          <CardDescription>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 760 }}>
+      {/* LinkedIn */}
+      <div className="dash-card">
+        <div className="dash-card-head">
+          <h3 className="dash-card-title" style={CARD_TITLE_STYLE}>
+            <Share2 size={14} /> LinkedIn
+          </h3>
+        </div>
+        <div className="dash-card-body">
+          <p className="field-help" style={{ marginBottom: 12 }}>
             Sign in with LinkedIn to allow posting to your personal feed. Tokens
-            last 60 days; you'll get an in-app warning before they expire.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+            last 60 days; you&apos;ll get an in-app warning before they expire.
+          </p>
+
           {linkedinConns.length > 0 && (
-            <div className="space-y-2">
+            <div style={{ marginBottom: 12 }}>
               {linkedinConns.map((c) => {
                 const expMs = c.expiresAt ? new Date(c.expiresAt).getTime() : 0;
                 const days = expMs
@@ -113,96 +105,97 @@ export function ConnectionsPanel({
                   : null;
                 const expired = expMs > 0 && expMs < Date.now();
                 return (
-                  <div
-                    key={c.id}
-                    className="flex items-center justify-between rounded-md border bg-background p-3"
-                  >
-                    <div className="flex items-center gap-3">
-                      <Badge variant={expired ? "destructive" : "secondary"}>
-                        LinkedIn
-                      </Badge>
-                      <span className="text-sm">
-                        {c.displayName ?? "Member"}
-                      </span>
-                      {expired ? (
-                        <Badge variant="destructive">Expired — reconnect</Badge>
-                      ) : days !== null && days < 14 ? (
-                        <Badge variant="outline">Expires in {days}d</Badge>
-                      ) : null}
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
+                  <div key={c.id} className="dash-row">
+                    <span className="badge-pill">linkedin</span>
+                    <span style={{ fontSize: 12.5 }}>{c.displayName ?? "Member"}</span>
+                    {expired ? (
+                      <span className="badge-pill err">expired — reconnect</span>
+                    ) : days !== null && days < 14 ? (
+                      <span className="badge-pill warn">expires in {days}d</span>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="btn icon sm ghost danger right"
                       disabled={pending}
                       onClick={() => disconnect(c.id)}
+                      title="Disconnect"
                     >
-                      <Trash2 className="size-4" />
-                    </Button>
+                      <Trash2 size={13} />
+                    </button>
                   </div>
                 );
               })}
             </div>
           )}
-          <Button asChild variant={linkedinConns.length > 0 ? "outline" : "default"}>
-            <a href={`/api/linkedin/authorize?projectId=${projectId}`}>
-              {linkedinConns.length > 0 ? "Reconnect LinkedIn" : "Connect LinkedIn"}
-            </a>
-          </Button>
-        </CardContent>
-      </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Send className="size-4" />
-            Telegram
-          </CardTitle>
-          <CardDescription>
+          <a
+            className={"btn" + (linkedinConns.length > 0 ? "" : " accent")}
+            href={`/api/linkedin/authorize?projectId=${projectId}`}
+          >
+            {linkedinConns.length > 0 ? "Reconnect LinkedIn" : "Connect LinkedIn"}
+          </a>
+        </div>
+      </div>
+
+      {/* Telegram */}
+      <div className="dash-card">
+        <div className="dash-card-head">
+          <h3 className="dash-card-title" style={CARD_TITLE_STYLE}>
+            <Send size={14} /> Telegram
+          </h3>
+        </div>
+        <div className="dash-card-body">
+          <p className="field-help" style={{ marginBottom: 12 }}>
             Create a bot with{" "}
             <a
-              className="underline"
               href="https://t.me/BotFather"
               target="_blank"
               rel="noreferrer"
+              style={{ color: "var(--accent)", textDecoration: "underline" }}
             >
               @BotFather
             </a>
-            , add it to your channel as admin, then paste the token and channel
-            ID below.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+            , add it to your channel as admin, then paste the token and channel ID
+            below.
+          </p>
+
           {telegramConns.length > 0 && (
-            <div className="space-y-2">
+            <div style={{ marginBottom: 12 }}>
               {telegramConns.map((c) => (
-                <div
-                  key={c.id}
-                  className="flex items-center justify-between rounded-md border bg-background p-3"
-                >
-                  <div className="flex items-center gap-3">
-                    <Badge variant="secondary">Telegram</Badge>
-                    <span className="text-sm">
-                      {c.displayName ? `@${c.displayName}` : "Bot"} →{" "}
-                      <span className="font-mono">{c.externalId}</span>
-                    </span>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
+                <div key={c.id} className="dash-row">
+                  <span className="badge-pill">telegram</span>
+                  <span style={{ fontSize: 12.5 }}>
+                    {c.displayName ? `@${c.displayName}` : "Bot"} →{" "}
+                    <span className="mono">{c.externalId}</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="btn icon sm ghost danger right"
                     disabled={pending}
                     onClick={() => disconnect(c.id)}
+                    title="Disconnect"
                   >
-                    <Trash2 className="size-4" />
-                  </Button>
+                    <Trash2 size={13} />
+                  </button>
                 </div>
               ))}
             </div>
           )}
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="bot-token">Bot token</Label>
-              <Input
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 10,
+              marginBottom: 12,
+            }}
+          >
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label className="field-label" htmlFor="bot-token">
+                bot token
+              </label>
+              <input
+                className="input mono"
                 id="bot-token"
                 placeholder="123456:ABC-..."
                 value={botToken}
@@ -210,9 +203,12 @@ export function ConnectionsPanel({
                 autoComplete="off"
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="chat-id">Channel / chat ID</Label>
-              <Input
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label className="field-label" htmlFor="chat-id">
+                channel / chat id
+              </label>
+              <input
+                className="input mono"
                 id="chat-id"
                 placeholder="@my_channel or -1001234567890"
                 value={chatId}
@@ -222,11 +218,16 @@ export function ConnectionsPanel({
             </div>
           </div>
 
-          <Button onClick={connectTelegram} disabled={pending}>
-            {pending ? "Connecting..." : "Connect & send test"}
-          </Button>
-        </CardContent>
-      </Card>
+          <button
+            type="button"
+            className="btn accent"
+            onClick={connectTelegram}
+            disabled={pending}
+          >
+            {pending ? "Connecting…" : "Connect & send test"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -238,7 +238,7 @@ export default async function AnalyticsPage() {
                     ? 0
                     : Math.round((p.published / totalPosts30d) * 100);
                 const color =
-                  p.platform === "LINKEDIN" ? "#60a5fa" : "#34d399";
+                  p.platform === "LINKEDIN" ? "var(--info)" : "var(--ok)";
                 return (
                   <div key={p.platform}>
                     <div
