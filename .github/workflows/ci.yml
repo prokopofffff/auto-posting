@@ -5,10 +5,11 @@ on:
     branches: [main]
   pull_request:
 
-# Cancel superseded runs on the same ref (e.g. new pushes to a PR).
+# Cancel superseded runs on the same ref (e.g. new pushes to a PR), but never
+# cancel a main run mid-flight — that could interrupt a migration/deploy.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -41,3 +42,44 @@ jobs:
           # reads of the public vars deterministic.
           NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+
+  # Apply DB migrations and (re)deploy the `tick` Edge Function on every push to
+  # main, but only after the build passes. PRs never deploy: the job is gated on
+  # event + branch, and `needs: build` keeps a broken build from shipping.
+  #
+  # Required repo secrets (Settings → Secrets and variables → Actions):
+  #   SUPABASE_ACCESS_TOKEN  — personal access token (Account → Access Tokens)
+  #   SUPABASE_PROJECT_REF   — the project ref (Project Settings → General)
+  #   SUPABASE_DB_PASSWORD   — database password, used by `db push`
+  #
+  # One-time, done OUTSIDE this workflow (function secrets shouldn't round-trip
+  # through deploy logs):
+  #   supabase secrets set ENCRYPTION_KEY=... CRON_SECRET=... \
+  #     LINKEDIN_CLIENT_ID=... LINKEDIN_CLIENT_SECRET=... [NEWSAPI_KEY=...]
+  #   ENCRYPTION_KEY must match the app's so per-project credentials decrypt.
+  deploy:
+    name: Deploy migrations & edge functions
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Apply database migrations
+        run: supabase db push
+
+      # --no-verify-jwt: the function gates on CRON_SECRET itself, not a user JWT
+      # (matches the deploy note in supabase/functions/tick/index.ts).
+      - name: Deploy tick edge function
+        run: supabase functions deploy tick --no-verify-jwt --project-ref "$SUPABASE_PROJECT_REF"

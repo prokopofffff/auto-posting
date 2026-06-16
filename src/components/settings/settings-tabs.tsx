@@ -12,6 +12,7 @@ import {
   ConnectionsPanel,
   type ConnectedRow,
 } from "@/components/forms/connections-panel";
+import { AiPanel, type AiCredentialView } from "@/components/settings/ai-panel";
 
 type WritingStyle =
   | "professional"
@@ -35,6 +36,7 @@ type TabId =
   | "appearance"
   | "general"
   | "channels"
+  | "ai"
   | "voice"
   | "schedule"
   | "mode"
@@ -45,6 +47,7 @@ const TABS: Array<{ id: TabId; label: string }> = [
   { id: "appearance", label: "Appearance" },
   { id: "general", label: "General" },
   { id: "channels", label: "Channels" },
+  { id: "ai", label: "AI / Model" },
   { id: "voice", label: "Voice" },
   { id: "schedule", label: "Schedule" },
   { id: "mode", label: "Mode" },
@@ -108,6 +111,7 @@ export type SettingsInitial = {
   voiceMode: VoiceMode;
   voiceOverrides: Partial<Record<Platform, VoiceCfg>>;
   connections: ConnectedRow[];
+  ai: AiCredentialView | null;
 };
 
 export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
@@ -579,6 +583,9 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
           />
         </div>
       )}
+
+      {/* AI / MODEL */}
+      {tab === "ai" && <AiPanel projectId={initial.projectId} initial={initial.ai} />}
 
       {/* VOICE */}
       {tab === "voice" && (

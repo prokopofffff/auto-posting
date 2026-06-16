@@ -9,7 +9,7 @@ import {
 } from "@/lib/supabase/queries";
 import { getCurrentUser, userOwnsProject } from "@/server/project";
 import { publishDraft } from "@/server/publish";
-import { generateAdHocPost } from "@/lib/claude";
+import { invokeEdge } from "@/server/edge";
 import type { Platform } from "@/lib/types";
 
 const composeInputSchema = z.object({
@@ -136,16 +136,24 @@ export async function aiComposeDraftAction(input: z.input<typeof aiInputSchema>)
 
   const s = owned.project.settings;
   try {
-    const result = await generateAdHocPost({
-      topic: data.topic,
-      sourceUrl: data.sourceUrl || null,
-      tone: data.tone,
-      customStyle: s?.customStyle ?? null,
-      language: data.language,
-      includeHashtags: s?.includeHashtags ?? true,
-      includeSource: s?.includeSource ?? true,
-      maxChars: s?.maxPostChars ?? 2200,
+    // Generation runs in the edge function using THIS project's Claude
+    // credential (resolved server-side by projectId).
+    const result = await invokeEdge<
+      { ok: true; content: string; costUsd: number } | { ok: false; error: string }
+    >("compose", {
+      projectId: data.projectId,
+      input: {
+        topic: data.topic,
+        sourceUrl: data.sourceUrl || null,
+        tone: data.tone,
+        customStyle: s?.customStyle ?? null,
+        language: data.language,
+        includeHashtags: s?.includeHashtags ?? true,
+        includeSource: s?.includeSource ?? true,
+        maxChars: s?.maxPostChars ?? 2200,
+      },
     });
+    if (!result.ok) return { ok: false as const, error: result.error };
     return { ok: true as const, content: result.content, costUsd: result.costUsd };
   } catch (e) {
     return { ok: false as const, error: (e as Error).message };

@@ -1,191 +1,25 @@
-import { supabaseAdmin } from "@/lib/supabase/service";
-import { selectProjectWithRelations, unwrap } from "@/lib/supabase/queries";
-import { generatePost, type VoiceCfg } from "@/lib/claude";
-import { pickFreshArticle } from "@/lib/news";
-import { publishDraft } from "@/server/publish";
-import { computeScheduleInfo } from "@/lib/schedule";
-import type { Platform, ProjectSettings } from "@/lib/types";
+// Thin client over the `tick` Edge Function. The actual pipeline (news pick →
+// Claude generation → draft → autopublish) runs in supabase/functions/tick so
+// there is a single implementation reused by both the scheduler and the app.
+// Callers must verify project ownership before invoking (see runNowAction).
+import { invokeEdge } from "@/server/edge";
 
 export type PipelineResult =
   | { ok: true; draftId: string; published: boolean; skipped?: false }
   | { ok: true; skipped: true; reason: string }
   | { ok: false; error: string };
 
-function unifiedVoice(s: ProjectSettings): VoiceCfg {
-  return {
-    writingStyle: s.writingStyle,
-    customStyle: s.customStyle,
-    includeHashtags: s.includeHashtags,
-    includeSource: s.includeSource,
-    maxPostChars: s.maxPostChars,
-  };
-}
-
-function perPlatformVoice(
-  s: ProjectSettings,
-  targets: Platform[],
-): Partial<Record<Platform, VoiceCfg>> {
-  const fallback = unifiedVoice(s);
-  const overrides = (s.voiceOverrides as Partial<Record<Platform, Partial<VoiceCfg>>>) ?? {};
-  const out: Partial<Record<Platform, VoiceCfg>> = {};
-  for (const t of targets) {
-    const o = overrides[t] ?? {};
-    out[t] = {
-      writingStyle: o.writingStyle ?? fallback.writingStyle,
-      customStyle: o.customStyle ?? fallback.customStyle,
-      includeHashtags: o.includeHashtags ?? fallback.includeHashtags,
-      includeSource: o.includeSource ?? fallback.includeSource,
-      maxPostChars: o.maxPostChars ?? fallback.maxPostChars,
-    };
-  }
-  return out;
-}
-
 export async function runPipelineForProject(projectId: string): Promise<PipelineResult> {
-  const { data: project } = await selectProjectWithRelations(
-    supabaseAdmin,
-    projectId,
-  );
-  if (!project) return { ok: false, error: "Project not found." };
-  if (project.status !== "ACTIVE") return { ok: true, skipped: true, reason: "Project is paused." };
-
-  const settings = project.settings;
-  if (!settings) return { ok: false, error: "Project has no settings." };
-  const topics = settings.topics ?? [];
-  if (topics.length === 0) return { ok: true, skipped: true, reason: "No topics configured." };
-
-  const targets: Platform[] = [];
-  if (project.connectedAccounts.some((c) => c.platform === "TELEGRAM")) targets.push("TELEGRAM");
-  if (
-    project.connectedAccounts.some(
-      // expiresAt is an ISO string from supabase-js; parse before comparing.
-      (c) => c.platform === "LINKEDIN" && (!c.expiresAt || new Date(c.expiresAt).getTime() > Date.now()),
-    )
-  )
-    targets.push("LINKEDIN");
-  if (targets.length === 0) return { ok: true, skipped: true, reason: "No connected accounts." };
-
-  const article = await pickFreshArticle(projectId, topics);
-  if (!article) return { ok: true, skipped: true, reason: "No fresh news found for configured topics." };
-
-  const isPerPlatform = settings.voiceMode === "PER_PLATFORM";
-  const result = await generatePost({
-    article,
-    topics,
-    languages: settings.languages ?? ["en"],
-    targets,
-    voiceMode: isPerPlatform ? "PER_PLATFORM" : "UNIFIED",
-    voice: isPerPlatform ? perPlatformVoice(settings, targets) : unifiedVoice(settings),
-    factCheck: article.factCheck,
-  });
-
-  if (result.posts.length === 0) return { ok: false, error: "Model returned no posts." };
-
-  // Build storage shape
-  const contentByLang: Record<string, string> = {};
-  const contentByPlatform: Record<string, Record<string, string>> = {};
-
-  if (isPerPlatform) {
-    for (const p of result.posts) {
-      if (!p.platform) continue;
-      contentByPlatform[p.platform] ??= {};
-      contentByPlatform[p.platform][p.language] = p.content;
-    }
-    // Also fill contentByLang from the first platform we got, for fallback consumers.
-    const firstPlatform = Object.keys(contentByPlatform)[0];
-    if (firstPlatform) {
-      for (const [lang, text] of Object.entries(contentByPlatform[firstPlatform])) {
-        contentByLang[lang] = text;
-      }
-    }
-  } else {
-    for (const p of result.posts) contentByLang[p.language] = p.content;
+  try {
+    return await invokeEdge<PipelineResult>("generate", { projectId });
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
   }
-
-  const draft = await unwrap(
-    supabaseAdmin
-      .from("Draft")
-      .insert({
-        projectId: project.id,
-        topic: topics[0],
-        sourceUrl: article.url,
-        sourceTitle: article.title,
-        contentByLang,
-        // JSON columns take plain objects/null directly — no Prisma.JsonNull.
-        contentByPlatform: isPerPlatform ? contentByPlatform : null,
-        targets,
-        status: "PENDING",
-        tokensInput: result.tokensInput,
-        tokensOutput: result.tokensOutput,
-        costUsd: result.costUsd,
-        confidence: result.confidence,
-        factVerdict: article.factCheck.verdict,
-        sourceTrust: article.factCheck.trust,
-        corroboratingSources: article.factCheck.corroboratingSources,
-      })
-      .select()
-      .single(),
-  );
-
-  // Mode routing. An unverified story (low-trust source, no corroboration)
-  // never auto-publishes — it always waits for a human, regardless of mode.
-  const verified = article.factCheck.verdict !== "UNVERIFIED";
-  const shouldAutoPublish =
-    verified &&
-    (settings.mode === "AUTOPILOT" ||
-      (settings.mode === "HYBRID" && result.confidence >= settings.confidenceThreshold));
-
-  if (shouldAutoPublish) {
-    const res = await publishDraft(draft.id);
-    if (!res.ok) return { ok: false, error: res.error };
-    return { ok: true, draftId: draft.id, published: true };
-  }
-
-  return { ok: true, draftId: draft.id, published: false };
 }
 
-export async function publishDueScheduledDrafts(): Promise<{
-  published: number;
-  errors: number;
-}> {
-  const due = await unwrap(
-    supabaseAdmin
-      .from("Draft")
-      .select("id")
-      .eq("status", "SCHEDULED")
-      .lte("scheduledAt", new Date().toISOString()),
-  );
-  let published = 0;
-  let errors = 0;
-  for (const d of due) {
-    const res = await publishDraft(d.id);
-    if (res.ok) published += 1;
-    else errors += 1;
-  }
-  return { published, errors };
-}
-
-export async function runPipelineForAllDue(): Promise<{ ran: number; errors: number }> {
-  const projects = await unwrap(
-    supabaseAdmin.from("Project").select("id").eq("status", "ACTIVE"),
-  );
-
-  // Resolve every project's schedule concurrently (independent reads), then run
-  // the due pipelines sequentially so we don't fan out concurrent Claude /
-  // LinkedIn / Telegram calls.
-  const schedules = await Promise.all(
-    projects.map((proj) => computeScheduleInfo(proj.id)),
-  );
-  const dueProjects = projects.filter((_, i) => schedules[i]?.dueNow);
-
-  let ran = 0;
-  let errors = 0;
-
-  for (const proj of dueProjects) {
-    const res = await runPipelineForProject(proj.id);
-    if (res.ok) ran++;
-    else errors++;
-  }
-
-  return { ran, errors };
+// The scheduled fan-out (all due projects + flush scheduled drafts) runs
+// entirely inside the edge function's default "tick" action. Exposed here for
+// the manual /api/cron/tick fallback route.
+export async function runTick(): Promise<unknown> {
+  return invokeEdge("tick");
 }

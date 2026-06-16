@@ -1,15 +1,9 @@
-import Anthropic from "@anthropic-ai/sdk";
-
-const MODEL = "claude-opus-4-7";
-
-let _client: Anthropic | null = null;
-function client(): Anthropic {
-  if (!_client) {
-    if (!Deno.env.get("ANTHROPIC_API_KEY")) throw new Error("ANTHROPIC_API_KEY is not set");
-    _client = new Anthropic();
-  }
-  return _client;
-}
+import Anthropic from "npm:@anthropic-ai/sdk@0.90.0";
+import {
+  CLAUDE_CODE_PREAMBLE,
+  resolveClaude,
+  type ResolvedClaude,
+} from "./ai-credentials.ts";
 
 export type ModerationResult =
   | { allowed: true }
@@ -19,6 +13,8 @@ export type ModerationInput = {
   texts: string[]; // one per language
   bannedWords: string[];
   moderationEnabled: boolean;
+  // AI moderation runs through the project's own Claude credential.
+  projectId: string;
 };
 
 function checkBannedWords(
@@ -45,7 +41,10 @@ function checkBannedWords(
   return { allowed: true };
 }
 
-async function checkClaudeModeration(texts: string[]): Promise<ModerationResult> {
+async function checkClaudeModeration(
+  texts: string[],
+  resolved: ResolvedClaude,
+): Promise<ModerationResult> {
   const combined = texts
     .map((t, i) => `--- post ${i + 1} ---\n${t}`)
     .join("\n\n");
@@ -69,10 +68,14 @@ async function checkClaudeModeration(texts: string[]): Promise<ModerationResult>
     "Reason should be one short sentence (max 120 chars) when blocked, else null.",
   ].join("\n");
 
-  const response = await client().messages.create({
-    model: MODEL,
+  const systemBlocks: Anthropic.TextBlockParam[] = [];
+  if (resolved.oauth) systemBlocks.push({ type: "text", text: CLAUDE_CODE_PREAMBLE });
+  systemBlocks.push({ type: "text", text: system, cache_control: { type: "ephemeral" } });
+
+  const response = await resolved.client.messages.create({
+    model: resolved.model,
     max_tokens: 200,
-    system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+    system: systemBlocks,
     messages: [{ role: "user", content: combined }],
   });
 
@@ -93,14 +96,23 @@ async function checkClaudeModeration(texts: string[]): Promise<ModerationResult>
   return { allowed: true };
 }
 
-export async function moderate(input: ModerationInput): Promise<ModerationResult> {
+export async function moderate(
+  input: ModerationInput,
+  // Reuse an already-resolved client (e.g. the autopublish path that just
+  // generated with it) to avoid a second credential lookup + token refresh.
+  resolved?: ResolvedClaude,
+): Promise<ModerationResult> {
   const wordCheck = checkBannedWords(input.texts, input.bannedWords);
   if (!wordCheck.allowed) return wordCheck;
   if (input.moderationEnabled) {
     try {
-      return await checkClaudeModeration(input.texts);
+      return await checkClaudeModeration(
+        input.texts,
+        resolved ?? (await resolveClaude(input.projectId)),
+      );
     } catch {
-      // Moderation service error → fail-open; the user sees it in telemetry later
+      // No credential connected, or moderation service error → fail-open; the
+      // user sees publish telemetry either way.
       return { allowed: true };
     }
   }

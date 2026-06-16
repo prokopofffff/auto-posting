@@ -1,6 +1,31 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentProject } from "@/server/project";
+import { supabaseAdmin } from "@/lib/supabase/service";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
+import type { AiCredentialView } from "@/components/settings/ai-panel";
+
+// Read the project's Claude credential and return ONLY non-secret status fields
+// (booleans, mode, model, who connected, token expiry) — never the secrets.
+async function loadAiCredential(projectId: string): Promise<AiCredentialView | null> {
+  // Single round-trip: embed the connector's email via the createdBy FK.
+  const { data: cred } = await supabaseAdmin
+    .from("AiCredential")
+    .select(
+      "mode, model, apiKey, oauthAccessToken, oauthExpiresAt, creator:User!AiCredential_createdBy_fkey(email)",
+    )
+    .eq("projectId", projectId)
+    .maybeSingle();
+  if (!cred) return null;
+
+  return {
+    mode: cred.mode,
+    hasApiKey: !!cred.apiKey,
+    hasSubscription: !!cred.oauthAccessToken,
+    model: cred.model,
+    connectedByEmail: cred.creator?.email ?? null,
+    subscriptionExpiresAt: cred.oauthExpiresAt,
+  };
+}
 
 type Platform = "LINKEDIN" | "TELEGRAM";
 
@@ -36,10 +61,12 @@ export default async function SettingsPage() {
   if (!user) redirect("/sign-in");
   const project = await getCurrentProject(user.id);
   const s = project.settings;
+  const ai = await loadAiCredential(project.id);
 
   return (
     <SettingsTabs
       initial={{
+        ai,
         projectId: project.id,
         projectName: project.name,
         topics: s?.topics ?? [],
