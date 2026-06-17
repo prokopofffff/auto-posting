@@ -147,13 +147,19 @@ async function publishToLinkedIn(
   }
 }
 
-export async function publishDraft(draftId: string): Promise<
+export async function publishDraft(
+  draftId: string,
+  // On a retry we skip platforms that already published successfully, so we
+  // don't double-post to them while re-attempting the ones that errored.
+  opts?: { skipPlatforms?: Platform[] },
+): Promise<
   | { ok: true; posts: Array<{ platform: string; language: string; url: string | null }> }
   | { ok: false; error: string }
 > {
   const { data: draft } = await selectDraftWithProject(supabaseAdmin, draftId);
   if (!draft) return { ok: false, error: "Draft not found." };
   if (draft.status === "PUBLISHED") return { ok: false, error: "Already published." };
+  const skip = opts?.skipPlatforms ?? [];
 
   const content = draft.contentByLang as DraftContent;
   const contentByPlatform =
@@ -198,6 +204,7 @@ export async function publishDraft(draftId: string): Promise<
   const posts: Array<{ platform: string; language: string; url: string | null }> = [];
 
   for (const platform of draft.targets ?? []) {
+    if (skip.includes(platform)) continue;
     const conns = draft.project.connectedAccounts.filter((c) => c.platform === platform);
     for (const conn of conns) {
       const pub =
@@ -210,10 +217,20 @@ export async function publishDraft(draftId: string): Promise<
     }
   }
 
+  // Derive the final status from ALL post rows (including ones from earlier
+  // attempts), not just the ones created in this pass. A draft counts as
+  // PUBLISHED only when something shipped and nothing is left erroring — a
+  // partial failure (e.g. Telegram ok, LinkedIn errored) stays FAILED so it
+  // surfaces in the Failed filter and stays retryable.
+  const allPosts = await unwrap(
+    supabaseAdmin.from("Post").select("error").eq("draftId", draft.id),
+  );
+  const anyError = allPosts.some((p) => p.error);
+  const anySuccess = allPosts.some((p) => !p.error);
   await unwrap(
     supabaseAdmin
       .from("Draft")
-      .update({ status: posts.length > 0 ? "PUBLISHED" : "FAILED" })
+      .update({ status: anySuccess && !anyError ? "PUBLISHED" : "FAILED" })
       .eq("id", draft.id),
   );
 

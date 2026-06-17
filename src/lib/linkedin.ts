@@ -5,7 +5,7 @@ const AUTHORIZE_URL = "https://www.linkedin.com/oauth/v2/authorization";
 const TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken";
 const USERINFO_URL = "https://api.linkedin.com/v2/userinfo";
 const POSTS_URL = "https://api.linkedin.com/rest/posts";
-const LINKEDIN_VERSION = "202404";
+const LINKEDIN_VERSION = "202605";
 
 const SCOPES = ["openid", "profile", "w_member_social"];
 
