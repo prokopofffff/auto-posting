@@ -8,7 +8,7 @@ import {
   unwrap,
 } from "./supabase.ts";
 import { generatePost, type VoiceCfg } from "./claude.ts";
-import { resolveClaude } from "./ai-credentials.ts";
+import { resolveModel } from "./ai-credentials.ts";
 import { pickFreshArticle } from "./news.ts";
 import { publishDraft } from "./publish.ts";
 import { computeScheduleInfo } from "./schedule.ts";
@@ -73,11 +73,11 @@ export async function runPipelineForProject(projectId: string): Promise<Pipeline
     targets.push("LINKEDIN");
   if (targets.length === 0) return { ok: true, skipped: true, reason: "No connected accounts." };
 
-  // Resolve this project's own Claude credential up front so a missing/expired
+  // Resolve this project's own AI credential up front so a missing/expired
   // credential fails fast with a clear message — before we spend a news fetch.
   let resolved;
   try {
-    resolved = await resolveClaude(projectId);
+    resolved = await resolveModel(projectId);
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }

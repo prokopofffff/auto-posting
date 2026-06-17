@@ -1,6 +1,5 @@
-import Anthropic from "npm:@anthropic-ai/sdk@0.90.0";
 import type { FactCheck, NewsItem } from "./news-types.ts";
-import { CLAUDE_CODE_PREAMBLE, type ResolvedClaude } from "./ai-credentials.ts";
+import type { ResolvedModel } from "./ai-credentials.ts";
 
 // Pricing is telemetry only (the cost estimate stored on the draft) and is
 // independent of which credential is used — override per-MTok via env if your
@@ -25,8 +24,9 @@ function computeCostUsd(tokensInput: number, tokensOutput: number): number {
   );
 }
 
-// The Anthropic client + model now come from the per-project credential
-// resolver (./ai-credentials.ts), passed in by callers — no env-based singleton.
+// The model client now comes from the per-project credential resolver
+// (./ai-credentials.ts), passed in by callers — no env-based singleton, and
+// provider-agnostic (Claude or DeepSeek) via its `complete` closure.
 
 const STYLE_DIRECTIVES: Record<string, string> = {
   professional:
@@ -181,48 +181,14 @@ function extractJson(text: string): unknown {
   return JSON.parse(match[0]);
 }
 
-async function callModel(
-  resolved: ResolvedClaude,
-  systemText: string,
-  userText: string,
-  maxTokens: number,
-) {
-  const systemBlocks: Anthropic.TextBlockParam[] = [];
-  if (resolved.oauth) {
-    systemBlocks.push({ type: "text", text: CLAUDE_CODE_PREAMBLE });
-  }
-  systemBlocks.push({
-    type: "text",
-    text: systemText,
-    cache_control: { type: "ephemeral" },
-  });
-  // No `thinking` / `effort` / sampling params: the model is user-selectable
-  // (default Haiku), and omitting these keeps the call valid across every model
-  // the picker can offer — including ones that 400 on adaptive thinking.
-  const response = await resolved.client.messages.create({
-    model: resolved.model,
-    max_tokens: maxTokens,
-    system: systemBlocks,
-    messages: [{ role: "user", content: userText }],
-  });
-  const text = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
-  const usage = response.usage;
-  // Count every input bucket: fresh, cache reads, and cache *writes* (cache misses —
-  // the common case here since pipeline runs are spaced well beyond the ephemeral TTL).
-  const tokensInput =
-    (usage?.input_tokens ?? 0) +
-    (usage?.cache_read_input_tokens ?? 0) +
-    (usage?.cache_creation_input_tokens ?? 0);
-  const tokensOutput = usage?.output_tokens ?? 0;
-  return { text, tokensInput, tokensOutput };
-}
+// The per-provider wire format (Anthropic prompt-cache blocks + oauth preamble,
+// or DeepSeek's OpenAI-shaped call) lives in the resolver's `complete` closure,
+// so callers below just hand it a system + user string and read back text +
+// token counts.
 
 export async function generatePost(
   input: GenerateInput,
-  resolved: ResolvedClaude,
+  resolved: ResolvedModel,
 ): Promise<GenerationResult> {
   const { article, ...rest } = input;
   const system = buildSystemPrompt(rest);
@@ -239,12 +205,11 @@ export async function generatePost(
     .filter(Boolean)
     .join("\n");
 
-  const { text, tokensInput, tokensOutput } = await callModel(
-    resolved,
+  const { text, tokensInput, tokensOutput } = await resolved.complete({
     system,
-    userMsg,
-    input.voiceMode === "PER_PLATFORM" ? 4000 : 2000,
-  );
+    user: userMsg,
+    maxTokens: input.voiceMode === "PER_PLATFORM" ? 4000 : 2000,
+  });
 
   const parsed = extractJson(text) as {
     posts?: Array<{
@@ -319,7 +284,7 @@ export type AdHocResult = {
 
 export async function generateAdHocPost(
   input: AdHocInput,
-  resolved: ResolvedClaude,
+  resolved: ResolvedModel,
 ): Promise<AdHocResult> {
   const styleBody =
     input.tone === "custom"
@@ -362,7 +327,11 @@ export async function generateAdHocPost(
     .filter(Boolean)
     .join("\n");
 
-  const { text, tokensInput, tokensOutput } = await callModel(resolved, system, userMsg, 1500);
+  const { text, tokensInput, tokensOutput } = await resolved.complete({
+    system,
+    user: userMsg,
+    maxTokens: 1500,
+  });
   const parsed = extractJson(text) as { content?: string };
   if (!parsed.content) throw new Error("Model response missing 'content'.");
   return {
