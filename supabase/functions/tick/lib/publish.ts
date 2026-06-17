@@ -213,10 +213,18 @@ export async function publishDraft(
     }
   }
 
+  // Derive status from ALL post rows: PUBLISHED only when something shipped and
+  // nothing errored. A partial failure (e.g. Telegram ok, LinkedIn errored)
+  // stays FAILED so it shows up in the app's Failed filter and stays retryable.
+  const allPosts = await unwrap(
+    supabaseAdmin.from("Post").select("error").eq("draftId", draft.id),
+  );
+  const anyError = allPosts.some((p: { error: string | null }) => p.error);
+  const anySuccess = allPosts.some((p: { error: string | null }) => !p.error);
   await unwrap(
     supabaseAdmin
       .from("Draft")
-      .update({ status: posts.length > 0 ? "PUBLISHED" : "FAILED" })
+      .update({ status: anySuccess && !anyError ? "PUBLISHED" : "FAILED" })
       .eq("id", draft.id),
   );
 

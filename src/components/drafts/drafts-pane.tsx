@@ -381,7 +381,8 @@ export function DraftsPane({
                     </span>
                   ))}
                   <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                    {active.status === "FAILED" && (
+                    {(active.status === "FAILED" ||
+                      active.posts.some((p) => p.error)) && (
                       <button
                         type="button"
                         className="btn xs ghost"

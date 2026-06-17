@@ -7,7 +7,7 @@ import { TransientPublishError, parseRetryAfter } from "./retry.ts";
 
 const TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken";
 const POSTS_URL = "https://api.linkedin.com/rest/posts";
-const LINKEDIN_VERSION = "202404";
+const LINKEDIN_VERSION = "202605";
 
 export type LinkedInTokenResponse = {
   access_token: string;

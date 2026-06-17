@@ -6,6 +6,7 @@ import { unwrap } from "@/lib/supabase/queries";
 import { getCurrentUser, userOwnsProject } from "@/server/project";
 import { publishDraft } from "@/server/publish";
 import { runPipelineForProject } from "@/server/pipeline";
+import type { Platform } from "@/lib/types";
 
 async function assertDraftOwnership(draftId: string) {
   const user = await getCurrentUser();
@@ -61,6 +62,16 @@ export async function updateDraftContentAction(
 export async function retryDraftAction(draftId: string) {
   const owned = await assertDraftOwnership(draftId);
   if (!owned.ok) return owned;
+  // Platforms that already shipped successfully — skip them on the retry so a
+  // partial failure (one platform errored, another succeeded) doesn't double-post.
+  const existing = await unwrap(
+    supabaseAdmin.from("Post").select("platform, error").eq("draftId", draftId),
+  );
+  const succeeded = [
+    ...new Set(
+      existing.filter((p) => !p.error).map((p) => p.platform as Platform),
+    ),
+  ];
   // Wipe failed post attempts so the retry is clean.
   await unwrap(
     supabaseAdmin
@@ -73,7 +84,7 @@ export async function retryDraftAction(draftId: string) {
   await unwrap(
     supabaseAdmin.from("Draft").update({ status: "PENDING" }).eq("id", draftId),
   );
-  const res = await publishDraft(draftId);
+  const res = await publishDraft(draftId, { skipPlatforms: succeeded });
   revalidatePath("/drafts");
   revalidatePath("/dashboard");
   return res.ok ? { ok: true as const } : { ok: false as const, error: res.error };
