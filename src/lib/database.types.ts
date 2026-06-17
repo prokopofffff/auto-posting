@@ -39,6 +39,7 @@ export type Database = {
           apiKey: string | null
           createdAt: string
           createdBy: string | null
+          deepseekApiKey: string | null
           id: string
           mode: Database["public"]["Enums"]["AiCredentialMode"]
           model: string | null
@@ -46,12 +47,14 @@ export type Database = {
           oauthExpiresAt: string | null
           oauthRefreshToken: string | null
           projectId: string
+          provider: Database["public"]["Enums"]["AiProvider"]
           updatedAt: string
         }
         Insert: {
           apiKey?: string | null
           createdAt?: string
           createdBy?: string | null
+          deepseekApiKey?: string | null
           id?: string
           mode?: Database["public"]["Enums"]["AiCredentialMode"]
           model?: string | null
@@ -59,12 +62,14 @@ export type Database = {
           oauthExpiresAt?: string | null
           oauthRefreshToken?: string | null
           projectId: string
+          provider?: Database["public"]["Enums"]["AiProvider"]
           updatedAt?: string
         }
         Update: {
           apiKey?: string | null
           createdAt?: string
           createdBy?: string | null
+          deepseekApiKey?: string | null
           id?: string
           mode?: Database["public"]["Enums"]["AiCredentialMode"]
           model?: string | null
@@ -72,6 +77,7 @@ export type Database = {
           oauthExpiresAt?: string | null
           oauthRefreshToken?: string | null
           projectId?: string
+          provider?: Database["public"]["Enums"]["AiProvider"]
           updatedAt?: string
         }
         Relationships: [
@@ -559,6 +565,7 @@ export type Database = {
     }
     Enums: {
       AiCredentialMode: "API_KEY" | "SUBSCRIPTION"
+      AiProvider: "ANTHROPIC" | "DEEPSEEK"
       DraftStatus:
         | "PENDING"
         | "APPROVED"
@@ -704,6 +711,7 @@ export const Constants = {
   public: {
     Enums: {
       AiCredentialMode: ["API_KEY", "SUBSCRIPTION"],
+      AiProvider: ["ANTHROPIC", "DEEPSEEK"],
       DraftStatus: [
         "PENDING",
         "APPROVED",

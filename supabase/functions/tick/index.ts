@@ -28,7 +28,7 @@ import {
   runPipelineForProject,
 } from "./lib/pipeline.ts";
 import { generateAdHocPost, type AdHocInput } from "./lib/claude.ts";
-import { listModels, resolveClaude } from "./lib/ai-credentials.ts";
+import { listModels, resolveModel } from "./lib/ai-credentials.ts";
 import { moderate, type ModerationInput } from "./lib/moderation.ts";
 
 function isAuthorized(req: Request): boolean {
@@ -101,7 +101,7 @@ Deno.serve(async (req: Request) => {
         if (!body.projectId || !body.input) {
           return json({ ok: false, error: "projectId and input required" }, 400);
         }
-        const resolved = await resolveClaude(body.projectId);
+        const resolved = await resolveModel(body.projectId);
         const result = await generateAdHocPost(body.input, resolved);
         return json({ ok: true, ...result });
       }

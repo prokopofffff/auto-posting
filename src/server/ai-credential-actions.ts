@@ -77,6 +77,7 @@ export async function connectClaudeSubscriptionAction(
     supabaseAdmin.from("AiCredential").upsert(
       {
         projectId,
+        provider: "ANTHROPIC",
         mode: "SUBSCRIPTION",
         oauthAccessToken: await encrypt(tokens.access_token),
         oauthRefreshToken: tokens.refresh_token
@@ -84,12 +85,39 @@ export async function connectClaudeSubscriptionAction(
           : null,
         oauthExpiresAt: expiresAt,
         createdBy: g.user.id,
+        // Connecting Claude makes it the active provider; drop a DeepSeek model
+        // id so the picker falls back to the Claude default.
+        ...(await clearModelOnProviderSwitch(projectId, "ANTHROPIC")),
       },
       { onConflict: "projectId" },
     ),
   );
   revalidate();
   return { ok: true as const };
+}
+
+// The one rule: when a write switches the active provider, the stored `model`
+// (a Claude id vs a DeepSeek id) no longer applies, so null it; same-provider
+// writes keep the chosen model. Both the connect upserts and the active-switch
+// update funnel through this so the rule lives in one place.
+function modelResetOnSwitch(
+  current: "ANTHROPIC" | "DEEPSEEK" | null | undefined,
+  next: "ANTHROPIC" | "DEEPSEEK",
+): { model?: null } {
+  return current && current !== next ? { model: null } : {};
+}
+
+// Connect actions don't hold the current row, so read just its provider first.
+async function clearModelOnProviderSwitch(
+  projectId: string,
+  next: "ANTHROPIC" | "DEEPSEEK",
+): Promise<{ model?: null }> {
+  const { data } = await supabaseAdmin
+    .from("AiCredential")
+    .select("provider")
+    .eq("projectId", projectId)
+    .maybeSingle();
+  return modelResetOnSwitch(data?.provider, next);
 }
 
 // ── API key ──────────────────────────────────────────────────────────────────
@@ -112,9 +140,11 @@ export async function connectClaudeApiKeyAction(input: z.input<typeof apiKeySche
     supabaseAdmin.from("AiCredential").upsert(
       {
         projectId,
+        provider: "ANTHROPIC",
         mode: "API_KEY",
         apiKey: await encrypt(apiKey),
         createdBy: g.user.id,
+        ...(await clearModelOnProviderSwitch(projectId, "ANTHROPIC")),
       },
       { onConflict: "projectId" },
     ),
@@ -123,24 +153,79 @@ export async function connectClaudeApiKeyAction(input: z.input<typeof apiKeySche
   return { ok: true as const };
 }
 
-// ── Mode switch & model ────────────────────────────────────────────────────
+// ── DeepSeek API key ───────────────────────────────────────────────────────
 
-export async function setAiModeAction(projectId: string, mode: "API_KEY" | "SUBSCRIPTION") {
+// Same shape as a Claude API key (an opaque bearer string), so it reuses
+// apiKeySchema rather than declaring an identical one.
+export async function connectDeepSeekApiKeyAction(input: z.input<typeof apiKeySchema>) {
+  const parsed = apiKeySchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false as const, error: firstIssue(parsed.error) };
+  }
+  const { projectId, apiKey } = parsed.data;
+  const g = await guard(projectId);
+  if (!g.ok) return g;
+
+  await unwrap(
+    supabaseAdmin.from("AiCredential").upsert(
+      {
+        projectId,
+        provider: "DEEPSEEK",
+        deepseekApiKey: await encrypt(apiKey),
+        createdBy: g.user.id,
+        ...(await clearModelOnProviderSwitch(projectId, "DEEPSEEK")),
+      },
+      { onConflict: "projectId" },
+    ),
+  );
+  revalidate();
+  return { ok: true as const };
+}
+
+// ── Active-credential switch & model ────────────────────────────────────────
+
+// Which connected credential the project generates with. Maps a UI "kind" to
+// the (provider, mode) pair and validates the matching secret exists.
+const KIND = {
+  CLAUDE_API_KEY: { provider: "ANTHROPIC", mode: "API_KEY" },
+  CLAUDE_SUBSCRIPTION: { provider: "ANTHROPIC", mode: "SUBSCRIPTION" },
+  DEEPSEEK: { provider: "DEEPSEEK" },
+} as const;
+
+export type AiCredentialKind = keyof typeof KIND;
+
+export async function setAiCredentialAction(projectId: string, kind: AiCredentialKind) {
   const g = await guard(projectId);
   if (!g.ok) return g;
   const { data: cred } = await supabaseAdmin
     .from("AiCredential")
-    .select("apiKey, oauthAccessToken")
+    .select("apiKey, oauthAccessToken, deepseekApiKey, provider")
     .eq("projectId", projectId)
     .maybeSingle();
   if (!cred) return { ok: false as const, error: "Connect a credential first." };
-  if (mode === "API_KEY" && !cred.apiKey) {
-    return { ok: false as const, error: "No API key connected." };
+
+  if (kind === "CLAUDE_API_KEY" && !cred.apiKey) {
+    return { ok: false as const, error: "No Claude API key connected." };
   }
-  if (mode === "SUBSCRIPTION" && !cred.oauthAccessToken) {
-    return { ok: false as const, error: "No subscription connected." };
+  if (kind === "CLAUDE_SUBSCRIPTION" && !cred.oauthAccessToken) {
+    return { ok: false as const, error: "No Claude subscription connected." };
   }
-  await unwrap(supabaseAdmin.from("AiCredential").update({ mode }).eq("projectId", projectId));
+  if (kind === "DEEPSEEK" && !cred.deepseekApiKey) {
+    return { ok: false as const, error: "No DeepSeek API key connected." };
+  }
+
+  const target = KIND[kind];
+  await unwrap(
+    supabaseAdmin
+      .from("AiCredential")
+      .update({
+        provider: target.provider,
+        // DeepSeek ignores `mode`; leave it as-is for that kind.
+        ...("mode" in target ? { mode: target.mode } : {}),
+        ...modelResetOnSwitch(cred.provider, target.provider),
+      })
+      .eq("projectId", projectId),
+  );
   revalidate();
   return { ok: true as const };
 }
@@ -163,7 +248,7 @@ export async function setAiModelAction(input: z.input<typeof modelSchema>) {
   return { ok: true as const };
 }
 
-export async function listClaudeModelsAction(projectId: string) {
+export async function listAiModelsAction(projectId: string) {
   const g = await guard(projectId);
   if (!g.ok) return g;
   try {

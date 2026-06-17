@@ -3,27 +3,47 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { KeyRound, Sparkles, Trash2, ExternalLink } from "lucide-react";
+import { KeyRound, Sparkles, Trash2, ExternalLink, Brain } from "lucide-react";
 import {
   startClaudeLoginAction,
   connectClaudeSubscriptionAction,
   connectClaudeApiKeyAction,
-  setAiModeAction,
+  connectDeepSeekApiKeyAction,
+  setAiCredentialAction,
   setAiModelAction,
-  listClaudeModelsAction,
+  listAiModelsAction,
   disconnectAiCredentialAction,
+  type AiCredentialKind,
 } from "@/server/ai-credential-actions";
 
-type Mode = "API_KEY" | "SUBSCRIPTION";
+type Provider = "ANTHROPIC" | "DEEPSEEK";
 
 export type AiCredentialView = {
-  mode: Mode;
+  provider: Provider;
+  mode: "API_KEY" | "SUBSCRIPTION";
   hasApiKey: boolean;
   hasSubscription: boolean;
+  hasDeepSeek: boolean;
   model: string | null;
   connectedByEmail: string | null;
   subscriptionExpiresAt: string | null;
 };
+
+// The three things a project can generate with. (provider, mode) lives on the
+// server; the UI works in these flatter "kinds".
+type Kind = AiCredentialKind;
+
+function providerOf(kind: Kind): Provider {
+  return kind === "DEEPSEEK" ? "DEEPSEEK" : "ANTHROPIC";
+}
+
+// Which kind is actually persisted as active, given the credential view.
+function deriveActiveKind(v: AiCredentialView | null): Kind | null {
+  if (!v) return null;
+  if (v.provider === "DEEPSEEK") return v.hasDeepSeek ? "DEEPSEEK" : null;
+  if (v.mode === "SUBSCRIPTION") return v.hasSubscription ? "CLAUDE_SUBSCRIPTION" : null;
+  return v.hasApiKey ? "CLAUDE_API_KEY" : null;
+}
 
 export function AiPanel({
   projectId,
@@ -35,15 +55,17 @@ export function AiPanel({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
-  const connected = !!initial && (initial.hasApiKey || initial.hasSubscription);
-  // The active (persisted) mode is whatever the server says — single source of
+  const connected =
+    !!initial && (initial.hasApiKey || initial.hasSubscription || initial.hasDeepSeek);
+  // The active (persisted) kind is whatever the server says — single source of
   // truth, derived from props. `view` is purely which form the user is looking
-  // at; it starts on the active mode but can wander (e.g. to connect the other).
-  const activeMode: Mode | null = connected ? initial!.mode : null;
-  const [view, setView] = useState<Mode>(initial?.mode ?? "API_KEY");
+  // at; it starts on the active kind but can wander (e.g. to connect another).
+  const activeKind = deriveActiveKind(initial);
+  const [view, setView] = useState<Kind>(activeKind ?? "CLAUDE_API_KEY");
 
-  // API key
+  // Secrets
   const [apiKey, setApiKey] = useState("");
+  const [deepseekKey, setDeepseekKey] = useState("");
 
   // Subscription PKCE round-trip (verifier/state held client-side per PKCE)
   const [pkce, setPkce] = useState<{ verifier: string; state: string } | null>(null);
@@ -53,16 +75,24 @@ export function AiPanel({
 
   // Models (loaded live from the connected credential)
   const [models, setModels] = useState<{ id: string; displayName: string }[]>([]);
-  // Empty string = no explicit choice → the edge resolver applies the project
-  // default (Haiku). The default model id lives only in the resolver, not here.
+  // Empty string = no explicit choice → the edge resolver applies the provider
+  // default. The default model id lives only in the resolver, not here.
   const [model, setModel] = useState<string>(initial?.model ?? "");
   const [loadingModels, setLoadingModels] = useState(false);
+
+  // After a connect/switch that changes provider, the stored model no longer
+  // applies — drop the local selection so the picker shows the new default.
+  // Always clear the cached list so it reloads for the (possibly new) provider.
+  function resetModelForProvider(target: Provider) {
+    if (initial?.provider !== target) setModel("");
+    setModels([]);
+  }
 
   function loadModels() {
     if (!connected) return;
     setLoadingModels(true);
     startTransition(async () => {
-      const res = await listClaudeModelsAction(projectId);
+      const res = await listAiModelsAction(projectId);
       setLoadingModels(false);
       if (!res.ok) {
         toast.error(res.error);
@@ -78,19 +108,31 @@ export function AiPanel({
     if (connected && models.length === 0 && !loadingModels) loadModels();
   }
 
-  function selectView(next: Mode) {
+  function selectView(next: Kind) {
     setView(next);
-    // If that credential exists and isn't already active, make it the active
-    // one. Otherwise this is just navigating to its connect form.
-    const can = next === "API_KEY" ? initial?.hasApiKey : initial?.hasSubscription;
-    if (!can || next === activeMode) return;
+    // Does that credential already exist? If so and it isn't active, make it the
+    // active one. Otherwise this is just navigating to its connect form.
+    const can =
+      next === "CLAUDE_API_KEY"
+        ? initial?.hasApiKey
+        : next === "CLAUDE_SUBSCRIPTION"
+        ? initial?.hasSubscription
+        : initial?.hasDeepSeek;
+    if (!can || next === activeKind) return;
     startTransition(async () => {
-      const res = await setAiModeAction(projectId, next);
+      const res = await setAiCredentialAction(projectId, next);
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
-      toast.success(`Using ${next === "API_KEY" ? "API key" : "subscription"}.`);
+      const label =
+        next === "DEEPSEEK"
+          ? "DeepSeek"
+          : next === "CLAUDE_API_KEY"
+          ? "Claude API key"
+          : "Claude subscription";
+      toast.success(`Using ${label}.`);
+      resetModelForProvider(providerOf(next));
       router.refresh();
     });
   }
@@ -108,6 +150,25 @@ export function AiPanel({
       }
       toast.success("API key saved.");
       setApiKey("");
+      resetModelForProvider("ANTHROPIC");
+      router.refresh();
+    });
+  }
+
+  function saveDeepseekKey() {
+    if (!deepseekKey.trim()) {
+      toast.error("Paste an API key first.");
+      return;
+    }
+    startTransition(async () => {
+      const res = await connectDeepSeekApiKeyAction({ projectId, apiKey: deepseekKey });
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success("DeepSeek API key saved.");
+      setDeepseekKey("");
+      resetModelForProvider("DEEPSEEK");
       router.refresh();
     });
   }
@@ -170,6 +231,7 @@ export function AiPanel({
       setCode("");
       setPkce(null);
       setLoginUrl(null);
+      resetModelForProvider("ANTHROPIC");
       router.refresh();
     });
   }
@@ -185,7 +247,7 @@ export function AiPanel({
   }
 
   function disconnect() {
-    if (!window.confirm("Disconnect Claude for this project? Auto-posting will stop until you reconnect.")) {
+    if (!window.confirm("Disconnect AI for this project? Auto-posting will stop until you reconnect.")) {
       return;
     }
     startTransition(async () => {
@@ -203,16 +265,18 @@ export function AiPanel({
     ? new Date(initial.subscriptionExpiresAt).toLocaleString()
     : null;
 
-  // Per-mode status pill: the active credential reads "in use", a connected but
+  // Per-kind status pill: the active credential reads "in use", a connected but
   // inactive one reads "connected", an unconnected one shows nothing.
-  function statusPill(m: Mode, hasIt: boolean | undefined) {
+  function statusPill(kind: Kind, hasIt: boolean | undefined) {
     if (!hasIt) return null;
-    return m === activeMode ? (
+    return kind === activeKind ? (
       <span className="badge-pill accent">in use</span>
     ) : (
       <span className="badge-pill">connected</span>
     );
   }
+
+  const onDeepSeek = activeKind === "DEEPSEEK";
 
   return (
     <div style={{ maxWidth: 760 }}>
@@ -221,48 +285,65 @@ export function AiPanel({
         style={{ borderColor: "var(--accent-bg)", marginBottom: 16 }}
       >
         <div className="dash-card-sub" style={{ padding: 12 }}>
-          <strong>For testing.</strong> Connect this project&apos;s own Claude credential — an
-          Anthropic API key, or your Claude Max subscription via login-with-code. It is stored
-          encrypted and used only for this project; it is never shared with other users or
-          projects.
+          <strong>For testing.</strong> Connect this project&apos;s own model credential — an
+          Anthropic (Claude) API key, your Claude Max subscription via login-with-code, or a
+          DeepSeek API key. It is stored encrypted and used only for this project; it is never
+          shared with other users or projects.
         </div>
       </div>
 
-      {/* Mode */}
+      {/* Credential type */}
       <div className="field">
         <div className="field-label">credential type</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
           <div
-            className={"radio-card" + (view === "API_KEY" ? " on" : "")}
-            onClick={() => selectView("API_KEY")}
+            className={"radio-card" + (view === "CLAUDE_API_KEY" ? " on" : "")}
+            onClick={() => selectView("CLAUDE_API_KEY")}
             role="button"
             tabIndex={0}
           >
             <div className="dot" />
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13, fontWeight: 500, display: "flex", gap: 6, alignItems: "center" }}>
-                <KeyRound size={13} /> API key
-                {statusPill("API_KEY", initial?.hasApiKey)}
+                <KeyRound size={13} /> Claude API key
+                {statusPill("CLAUDE_API_KEY", initial?.hasApiKey)}
               </div>
               <div className="mono muted-2" style={{ fontSize: 11.5, marginTop: 2 }}>
-                a console.anthropic.com key · billed to your Anthropic account
+                a console.anthropic.com key
               </div>
             </div>
           </div>
           <div
-            className={"radio-card" + (view === "SUBSCRIPTION" ? " on" : "")}
-            onClick={() => selectView("SUBSCRIPTION")}
+            className={"radio-card" + (view === "CLAUDE_SUBSCRIPTION" ? " on" : "")}
+            onClick={() => selectView("CLAUDE_SUBSCRIPTION")}
             role="button"
             tabIndex={0}
           >
             <div className="dot" />
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13, fontWeight: 500, display: "flex", gap: 6, alignItems: "center" }}>
-                <Sparkles size={13} /> Claude Max subscription
-                {statusPill("SUBSCRIPTION", initial?.hasSubscription)}
+                <Sparkles size={13} /> Claude Max
+                {statusPill("CLAUDE_SUBSCRIPTION", initial?.hasSubscription)}
               </div>
               <div className="mono muted-2" style={{ fontSize: 11.5, marginTop: 2 }}>
-                login with code · for tests
+                login with code
+              </div>
+            </div>
+          </div>
+          <div
+            className={"radio-card" + (view === "DEEPSEEK" ? " on" : "")}
+            onClick={() => selectView("DEEPSEEK")}
+            role="button"
+            tabIndex={0}
+          >
+            <div className="dot" />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, display: "flex", gap: 6, alignItems: "center" }}>
+                <Brain size={13} /> DeepSeek
+                {statusPill("DEEPSEEK", initial?.hasDeepSeek)}
+              </div>
+              <div className="mono muted-2" style={{ fontSize: 11.5, marginTop: 2 }}>
+                an api.deepseek.com key
               </div>
             </div>
           </div>
@@ -271,8 +352,8 @@ export function AiPanel({
 
       <hr className="div" />
 
-      {/* API key mode */}
-      {view === "API_KEY" && (
+      {/* Claude API key */}
+      {view === "CLAUDE_API_KEY" && (
         <div className="field">
           <div className="field-label">anthropic api key</div>
           <input
@@ -290,8 +371,37 @@ export function AiPanel({
         </div>
       )}
 
-      {/* Subscription mode */}
-      {view === "SUBSCRIPTION" && (
+      {/* DeepSeek API key */}
+      {view === "DEEPSEEK" && (
+        <div className="field">
+          <div className="field-label">deepseek api key</div>
+          <input
+            className="input mono"
+            type="password"
+            placeholder={initial?.hasDeepSeek ? "•••••••••• (saved) — paste to replace" : "sk-..."}
+            value={deepseekKey}
+            onChange={(e) => setDeepseekKey(e.target.value)}
+            autoComplete="off"
+          />
+          <div className="field-help">
+            stored encrypted · only used for this project ·{" "}
+            <a
+              href="https://platform.deepseek.com/api_keys"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: "var(--accent)", textDecoration: "underline" }}
+            >
+              get a key
+            </a>
+          </div>
+          <button type="button" className="btn primary" onClick={saveDeepseekKey} disabled={pending} style={{ marginTop: 8 }}>
+            {pending ? "Saving…" : initial?.hasDeepSeek ? "Replace key" : "Save key"}
+          </button>
+        </div>
+      )}
+
+      {/* Claude Max subscription */}
+      {view === "CLAUDE_SUBSCRIPTION" && (
         <div className="field">
           <div className="field-label">claude max — login with code</div>
           {initial?.hasSubscription && !pkce && (
@@ -350,12 +460,12 @@ export function AiPanel({
         </div>
       )}
 
-      {/* Model selection (dynamic) */}
+      {/* Model selection (dynamic, provider-aware) */}
       {connected && (
         <>
           <hr className="div" />
           <div className="field" style={{ maxWidth: 420 }}>
-            <div className="field-label">claude model</div>
+            <div className="field-label">{onDeepSeek ? "deepseek model" : "claude model"}</div>
             <select
               className="select"
               value={model}
@@ -363,7 +473,9 @@ export function AiPanel({
               onFocus={ensureModelsLoaded}
               disabled={pending || loadingModels}
             >
-              <option value="">Project default (Haiku)</option>
+              <option value="">
+                {onDeepSeek ? "Project default (deepseek-chat)" : "Project default (Haiku)"}
+              </option>
               {/* Keep a saved custom model selectable even before the list loads. */}
               {model && models.length === 0 && <option value={model}>{model}</option>}
               {models.map((m) => (
@@ -373,7 +485,9 @@ export function AiPanel({
               ))}
             </select>
             <div className="field-help mono" style={{ fontSize: 11 }}>
-              {loadingModels ? "loading models…" : "list is fetched live — new models appear automatically · default: Haiku"}
+              {loadingModels
+                ? "loading models…"
+                : `list is fetched live — new models appear automatically · default: ${onDeepSeek ? "deepseek-chat" : "Haiku"}`}
               {" · "}
               <button
                 type="button"

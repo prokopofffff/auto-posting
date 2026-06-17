@@ -8,7 +8,7 @@ import { buildPostUrl, sendMessage } from "./telegram.ts";
 import { createPost as createLinkedInPost } from "./linkedin.ts";
 import { getValidLinkedInAccessToken } from "./linkedin-tokens.ts";
 import { moderate } from "./moderation.ts";
-import type { ResolvedClaude } from "./ai-credentials.ts";
+import type { ResolvedModel } from "./ai-credentials.ts";
 import { withRetry } from "./retry.ts";
 import type { ConnectedAccount, Platform } from "./types.ts";
 
@@ -155,7 +155,7 @@ export async function publishDraft(
   draftId: string,
   // Optional pre-resolved client from the caller (autopublish) so moderation
   // doesn't re-resolve the project's credential.
-  resolved?: ResolvedClaude,
+  resolved?: ResolvedModel,
 ): Promise<
   | { ok: true; posts: Array<{ platform: string; language: string; url: string | null }> }
   | { ok: false; error: string }
