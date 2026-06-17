@@ -22,6 +22,11 @@ export function relAgo(iso: string | null, now = new Date()): string {
   return `${Math.round(diff / DAY)}d ago`;
 }
 
+/** Whole days from `now` until `target`, clamped at 0. Used for token-expiry badges. */
+export function daysUntil(target: Date, now = Date.now()): number {
+  return Math.max(0, Math.round((target.getTime() - now) / DAY));
+}
+
 /** Absolute "26/05/2026 · 15:43". */
 export function fmtDateTime(iso: string): string {
   const d = new Date(iso);

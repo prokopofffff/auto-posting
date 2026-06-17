@@ -17,7 +17,7 @@ const COOKIE = "am_pid";
 // backstop for identities that predate the trigger (e.g. users migrated into
 // auth.users before it was installed): the session is already verified by
 // supabase.auth.getUser(), so seeding the public row from it is safe.
-export async function getCurrentUser() {
+export const getCurrentUser = cache(async function getCurrentUser() {
   const session = await auth();
   if (!session?.user?.id) return null;
   const { data } = await supabaseAdmin
@@ -46,7 +46,7 @@ export async function getCurrentUser() {
       .select()
       .single(),
   );
-}
+});
 
 // `cache()` dedupes per request: the app layout and the page both call
 // ensureOrg/getCurrentProject while rendering, and without this each concurrent

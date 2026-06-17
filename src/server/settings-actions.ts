@@ -24,6 +24,8 @@ const settingsSchema = z.object({
   projectId: z.string().min(1),
   projectName: z.string().min(1).max(80),
   topics: z.array(z.string().min(1).max(80)).min(1).max(100),
+  audience: z.string().max(500).optional().or(z.literal("")),
+  angle: z.string().max(500).optional().or(z.literal("")),
   languages: z.array(z.enum(["en", "ru"])).min(1),
   writingStyle: z.enum(["professional", "casual", "technical", "provocative", "custom"]),
   customStyle: z.string().max(2000).optional().or(z.literal("")),
@@ -74,6 +76,8 @@ export async function saveSettingsAction(input: SaveSettingsInput) {
       p_name: data.projectName,
       p_settings: {
         topics: data.topics,
+        audience: data.audience?.trim() || null,
+        angle: data.angle?.trim() || null,
         languages: data.languages,
         writingStyle: data.writingStyle,
         customStyle: data.customStyle || null,

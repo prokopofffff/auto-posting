@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentProject } from "@/server/project";
+import { daysUntil } from "@/lib/format";
 import { ComposeForm, type ComposeChannel } from "@/components/compose/compose-form";
 
 export default async function ComposePage() {
@@ -24,10 +25,7 @@ export default async function ComposePage() {
           : first.displayName ?? "LinkedIn",
       sub:
         first.expiresAt
-          ? `linkedin · token in ${Math.max(
-              0,
-              Math.round((new Date(first.expiresAt).getTime() - Date.now()) / 86_400_000),
-            )}d`
+          ? `linkedin · token in ${daysUntil(new Date(first.expiresAt))}d`
           : "linkedin",
     });
   }

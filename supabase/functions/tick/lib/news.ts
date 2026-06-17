@@ -11,12 +11,22 @@ import { GLOBAL_FALLBACK_FEEDS, TOPIC_FEEDS } from "./news-feeds.ts";
 import { fetchNewsApi, isNewsApiConfigured } from "./newsapi.ts";
 import { buildFactCheck, keywords } from "./fact-check.ts";
 import { domainOf, isHighTrust } from "./source-trust.ts";
+import { scoreCandidates } from "./claude.ts";
+import type { ResolvedModel } from "./ai-credentials.ts";
 import type { NewsItem, VerifiedArticle } from "./news-types.ts";
 
 export type { NewsItem, VerifiedArticle } from "./news-types.ts";
 
 /** How many fresh candidates we'll spend a corroboration check on per run. */
 const MAX_VERIFY = 4;
+
+/** How many fresh candidates we send to the relevance gate to be ranked. */
+const SCORE_POOL = 12;
+
+/** Minimum relevance score (0-100) a story needs to be eligible to post. Below
+ * this the gate considers it off-topic and the run is skipped rather than
+ * publishing a loosely-matched story. */
+const RELEVANCE_FLOOR = 45;
 
 const FEED_TIMEOUT_MS = 10_000;
 const USER_AGENT = "Mozilla/5.0 (compatible; account-manager/1.0)";
@@ -289,8 +299,28 @@ export async function fetchCandidateNews(topics: string[]): Promise<NewsItem[]> 
     daysBack: 7,
   });
 
-  const [rss, customNews] = await Promise.all([rssPromise, customPromise]);
-  return sortByRecency(dedupeByUrl([...customNews, ...rss]));
+  // Combined search: one query that ANDs all the topics together, surfacing
+  // stories that sit at the intersection of the creator's interests (e.g. an
+  // article about BOTH "ai" and "dev" rather than either alone). These tend to
+  // be the most on-brand, so we add them to the pool; the relevance gate then
+  // ranks the whole set. Only worth it with 2+ topics.
+  const combinedPromise =
+    topics.length >= 2
+      ? searchNews({
+          terms: [topics.join(" ")],
+          googleQuery: "combined",
+          preferNewsApi: false,
+          pageSize: 20,
+          daysBack: 7,
+        })
+      : Promise.resolve([] as NewsItem[]);
+
+  const [rss, customNews, combined] = await Promise.all([
+    rssPromise,
+    customPromise,
+    combinedPromise,
+  ]);
+  return sortByRecency(dedupeByUrl([...combined, ...customNews, ...rss]));
 }
 
 /**
@@ -315,21 +345,72 @@ async function verify(item: NewsItem): Promise<VerifiedArticle> {
   return { ...item, factCheck: buildFactCheck(item, pool) };
 }
 
+export type PickOptions = {
+  /** A resolved model enables the relevance gate; omit to keep recency order. */
+  resolved?: ResolvedModel;
+  audience?: string | null;
+  angle?: string | null;
+};
+
+type RankedCandidate = { item: NewsItem; score: number; topic: string | null };
+
+/**
+ * Order the candidate pool by fit with the creator's topics + audience + angle.
+ * With a model: score each, drop anything below RELEVANCE_FLOOR, sort best-first
+ * (so a recent-but-off-topic story loses to a slightly older on-topic one). An
+ * empty result means "nothing relevant enough — skip this run". Without a model
+ * (or if scoring fails) we keep the existing recency order and apply no floor,
+ * so the gate can never make generation strictly worse than before.
+ */
+async function rankByRelevance(
+  pool: NewsItem[],
+  topics: string[],
+  opts: PickOptions,
+): Promise<RankedCandidate[]> {
+  // No model (or scoring throws below) → keep the existing recency order and
+  // apply no floor, so the gate can never make generation worse than before.
+  const recencyOrder = (): RankedCandidate[] =>
+    pool.map((item) => ({ item, score: 0, topic: null }));
+  if (!opts.resolved) return recencyOrder();
+
+  try {
+    const scores = await scoreCandidates(
+      { topics, audience: opts.audience, angle: opts.angle, candidates: pool },
+      opts.resolved,
+    );
+    const byIndex = new Map(scores.map((s) => [s.index, s]));
+    return pool
+      .map((item, i) => {
+        const s = byIndex.get(i);
+        return { item, score: s?.score ?? 0, topic: s?.topic ?? null };
+      })
+      .filter((r) => r.score >= RELEVANCE_FLOOR)
+      .sort((a, b) => b.score - a.score);
+  } catch {
+    return recencyOrder();
+  }
+}
+
 export async function pickFreshArticle(
   projectId: string,
   topics: string[],
+  opts: PickOptions = {},
 ): Promise<VerifiedArticle | null> {
-  const candidates = await fetchCandidateNews(topics);
+  // The news fetch and the "what have we already posted" lookup are independent,
+  // so run them together rather than back-to-back.
+  const [candidates, recentPosts] = await Promise.all([
+    fetchCandidateNews(topics),
+    unwrap(
+      supabaseAdmin
+        .from("Post")
+        .select("externalUrl, content")
+        .eq("projectId", projectId)
+        .order("publishedAt", { ascending: false })
+        .limit(200),
+    ),
+  ]);
   if (candidates.length === 0) return null;
 
-  const recentPosts = await unwrap(
-    supabaseAdmin
-      .from("Post")
-      .select("externalUrl, content")
-      .eq("projectId", projectId)
-      .order("publishedAt", { ascending: false })
-      .limit(200),
-  );
   const usedUrls = new Set(
     recentPosts.map((p) => p.externalUrl).filter((u): u is string => !!u),
   );
@@ -343,12 +424,29 @@ export async function pickFreshArticle(
     return !recentTitles.some((t) => t === titleLc);
   });
 
-  const slice = (fresh.length > 0 ? fresh : candidates).slice(0, MAX_VERIFY);
-  if (slice.length === 0) return null;
+  const pool = (fresh.length > 0 ? fresh : candidates).slice(0, SCORE_POOL);
+  if (pool.length === 0) return null;
 
-  const top = await verify(slice[0]);
-  if (top.factCheck.verdict !== "UNVERIFIED") return top;
+  const ranked = await rankByRelevance(pool, topics, opts);
+  // Gate ran and rejected everything as off-topic — skip rather than post junk.
+  if (ranked.length === 0) return null;
 
-  const rest = await Promise.all(slice.slice(1).map(verify));
-  return rest.find((c) => c.factCheck.verdict !== "UNVERIFIED") ?? top;
+  const slice = ranked.slice(0, MAX_VERIFY);
+  const pick = (idx: number, article: VerifiedArticle): VerifiedArticle => ({
+    ...article,
+    matchedTopic: slice[idx].topic,
+    relevance: slice[idx].score,
+  });
+
+  // Verify lazily, best-first: the top-ranked story is usually trusted or
+  // corroborated, so check it alone before spending corroboration searches on
+  // the rest. The first corroborated story is also the highest-ranked one
+  // (`slice` is sorted best-first); if none corroborate, fall back to the top
+  // (which then goes to a human via the UNVERIFIED confidence ceiling).
+  const top = await verify(slice[0].item);
+  if (top.factCheck.verdict !== "UNVERIFIED") return pick(0, top);
+
+  const rest = await Promise.all(slice.slice(1).map((r) => verify(r.item)));
+  const restIdx = rest.findIndex((c) => c.factCheck.verdict !== "UNVERIFIED");
+  return restIdx >= 0 ? pick(restIdx + 1, rest[restIdx]) : pick(0, top);
 }

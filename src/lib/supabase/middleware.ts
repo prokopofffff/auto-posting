@@ -33,7 +33,12 @@ export async function updateSession(request: NextRequest) {
 
   // IMPORTANT: do not run code between createServerClient and getUser(); a
   // refresh is triggered here and any stray async work can desync the session.
-  await supabase.auth.getUser();
+  // This single call both refreshes the cookie AND validates the user against
+  // the auth server, so we return the user for the caller to reuse rather than
+  // having it call getUser() a second time.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  return { supabase, response: supabaseResponse };
+  return { response: supabaseResponse, user };
 }

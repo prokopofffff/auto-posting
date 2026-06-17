@@ -137,11 +137,15 @@ export function CommandPalette({
     };
   }, []);
 
-  // Reset state and focus input on open
+  // Reset state and focus input on open. Clearing the query/index when the
+  // palette opens is a deliberate sync to the `open` transition, not a
+  // render-cascading update.
   useEffect(() => {
     if (open) {
+      /* eslint-disable react-hooks/set-state-in-effect */
       setQuery("");
       setIdx(0);
+      /* eslint-enable react-hooks/set-state-in-effect */
       const t = setTimeout(() => inputRef.current?.focus(), 30);
       return () => clearTimeout(t);
     }

@@ -94,6 +94,8 @@ export type SettingsInitial = {
   projectId: string;
   projectName: string;
   topics: string[];
+  audience: string;
+  angle: string;
   languages: string[];
   writingStyle: WritingStyle;
   customStyle: string;
@@ -122,6 +124,10 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
   const [tab, setTab] = useState<TabId>("appearance");
   useEffect(() => {
     const fromHash = window.location.hash.replace("#", "") as TabId;
+    // Deep-link the tab from the URL hash once, after hydration — reading
+    // `window` during render would mismatch the server HTML. This is a
+    // deliberate mount-time sync, not a render-cascading update.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (TABS.some((t) => t.id === fromHash)) setTab(fromHash);
   }, []);
   useEffect(() => {
@@ -131,6 +137,8 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
 
   // Form state
   const [name, setName] = useState(initial.projectName);
+  const [audience, setAudience] = useState(initial.audience);
+  const [angle, setAngle] = useState(initial.angle);
   const [languages, setLanguages] = useState<string[]>(initial.languages);
   const [writingStyle, setWritingStyle] = useState<WritingStyle>(initial.writingStyle);
   const [customStyle, setCustomStyle] = useState(initial.customStyle);
@@ -163,10 +171,15 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
   useEffect(() => {
     const t = (localStorage.getItem("ap_theme") as "dark" | "light" | null) ?? "dark";
     const a = localStorage.getItem("ap_accent") ?? "#d97757";
-    setTheme(t);
-    setAccent(a);
     applyTheme(t);
     applyAccent(a);
+    // Read the persisted appearance once on the client after hydration —
+    // localStorage isn't available on the server, so this can't run during
+    // render. Deliberate mount-time sync, not a render-cascading update.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setTheme(t);
+    setAccent(a);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   function pickTheme(t: "dark" | "light") {
@@ -208,6 +221,8 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
         projectId: initial.projectId,
         projectName: name,
         topics: initial.topics,
+        audience,
+        angle,
         languages: languages as ("en" | "ru")[],
         writingStyle,
         customStyle,
@@ -244,6 +259,8 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
 
   function discard() {
     setName(initial.projectName);
+    setAudience(initial.audience);
+    setAngle(initial.angle);
     setLanguages(initial.languages);
     setWritingStyle(initial.writingStyle);
     setCustomStyle(initial.customStyle);
@@ -314,7 +331,8 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
         <div>
           <h1 className="page-title">Settings</h1>
           <div className="page-sub">
-            Configure how the agent writes, when it posts, and what it can't say.
+            Configure how the agent writes, when it posts, and what it can&apos;t
+            say.
           </div>
         </div>
         <div className="hdr-right">
@@ -571,6 +589,38 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
               .
             </div>
           </div>
+
+          <div className="field">
+            <div className="field-label">audience</div>
+            <textarea
+              className="textarea"
+              rows={2}
+              value={audience}
+              onChange={(e) => setAudience(e.target.value)}
+              placeholder="e.g. software developers building fintech products"
+            />
+            <div className="field-help">
+              Who you write for. The agent uses this to decide which stories are
+              relevant (off-topic ones are skipped, not posted) and whose
+              perspective to write from.
+            </div>
+          </div>
+
+          <div className="field">
+            <div className="field-label">angle</div>
+            <textarea
+              className="textarea"
+              rows={2}
+              value={angle}
+              onChange={(e) => setAngle(e.target.value)}
+              placeholder="e.g. engineering & infrastructure implications — APIs, security, developer experience"
+            />
+            <div className="field-help">
+              The lens to frame every story through. Lets the same topic be
+              covered for different readers (a developer vs. an investor vs. an
+              economist). Leave blank for a neutral take.
+            </div>
+          </div>
         </div>
       )}
 
@@ -691,7 +741,7 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
                     placeholder="Describe the voice, tone, and rules."
                   />
                   <div className="field-help mono" style={{ fontSize: 11 }}>
-                    replaces the preset's voice block in the system prompt.
+                    replaces the preset&apos;s voice block in the system prompt.
                   </div>
                 </div>
               )}

@@ -39,6 +39,9 @@ export default async function TopicsPage({
     createdAt: new Date(d.createdAt),
   }));
 
+  // Server component: renders once per request, so reading the wall clock here
+  // is intentional and deterministic for this render.
+  // eslint-disable-next-line react-hooks/purity
   const sevenDaysAgo = Date.now() - 7 * 86_400_000;
   const byTopic = new Map<
     string,

@@ -8,6 +8,7 @@ import {
   connectTelegramAction,
   disconnectAccountAction,
 } from "@/server/connection-actions";
+import { daysUntil } from "@/lib/format";
 
 const CARD_TITLE_STYLE = { display: "flex", alignItems: "center", gap: 6 } as const;
 
@@ -31,6 +32,9 @@ export function ConnectionsPanel({
   const [pending, startTransition] = useTransition();
   const [botToken, setBotToken] = useState("");
   const [chatId, setChatId] = useState("");
+  // Snapshot "now" once at mount — the expiry badges show day-granularity, so a
+  // fixed reference is fine and keeps render pure (no Date.now() during render).
+  const [now] = useState(() => Date.now());
 
   useEffect(() => {
     if (search.get("li_ok")) {
@@ -99,11 +103,9 @@ export function ConnectionsPanel({
           {linkedinConns.length > 0 && (
             <div style={{ marginBottom: 12 }}>
               {linkedinConns.map((c) => {
-                const expMs = c.expiresAt ? new Date(c.expiresAt).getTime() : 0;
-                const days = expMs
-                  ? Math.max(0, Math.round((expMs - Date.now()) / 86_400_000))
-                  : null;
-                const expired = expMs > 0 && expMs < Date.now();
+                const exp = c.expiresAt ? new Date(c.expiresAt) : null;
+                const days = exp ? daysUntil(exp, now) : null;
+                const expired = exp ? exp.getTime() < now : false;
                 return (
                   <div key={c.id} className="dash-row">
                     <span className="badge-pill">linkedin</span>

@@ -8,7 +8,6 @@ import {
   Download,
   Globe,
   Hash,
-  MoreHorizontal,
   Search,
   Shield,
   TextCursor,
@@ -355,7 +354,7 @@ export function TopicsTable({
                   <td>
                     <button
                       type="button"
-                      className="btn icon xs ghost"
+                      className="btn icon xs ghost danger"
                       onClick={() => {
                         startTransition(async () => {
                           const res = await removeTopicsAction(projectId, [r.name]);
@@ -366,7 +365,7 @@ export function TopicsTable({
                       aria-label={`Remove ${r.name}`}
                       title="Remove"
                     >
-                      <MoreHorizontal size={12} />
+                      <Trash2 size={12} />
                     </button>
                   </td>
                 </tr>

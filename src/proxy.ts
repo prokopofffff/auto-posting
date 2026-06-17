@@ -6,22 +6,21 @@ const PUBLIC_PATHS = ["/", "/sign-in", "/sign-up", "/api/auth", "/api/cron", "/a
 
 // Supabase @supabase/ssr proxy (formerly NextAuth's `auth()` middleware wrapper).
 // `updateSession` refreshes the session cookie and hands back the cookie-bearing
-// response plus a client bound to the rewritten cookies; we read the user from
-// that same client so the refresh and the auth check stay in sync. The refreshed
-// `response` MUST be the one returned (or have its cookies copied onto a redirect),
-// otherwise the rotated session cookie is dropped.
+// `response` plus the `user` it validated against the auth server during that
+// same refresh — so the refresh and the auth check stay in sync from one call.
+// The gate below only checks the user's presence; each page render re-derives
+// identity locally via `auth()`/getClaims (see src/auth.ts). The refreshed
+// `response` MUST be the one returned (or have its cookies copied onto a
+// redirect), otherwise the rotated session cookie is dropped.
 export default async function proxy(request: NextRequest) {
   const { nextUrl } = request;
-  const { supabase, response } = await updateSession(request);
+  const { response, user } = await updateSession(request);
 
   const isPublic = PUBLIC_PATHS.some(
     (p) => nextUrl.pathname === p || nextUrl.pathname.startsWith(p + "/"),
   );
   if (isPublic) return response;
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
   if (!user) {
     const url = new URL("/sign-in", nextUrl);
     url.searchParams.set("from", nextUrl.pathname);
