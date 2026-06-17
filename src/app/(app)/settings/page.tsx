@@ -72,6 +72,8 @@ export default async function SettingsPage() {
         projectId: project.id,
         projectName: project.name,
         topics: s?.topics ?? [],
+        audience: s?.audience ?? "",
+        angle: s?.angle ?? "",
         languages: s?.languages ?? ["en"],
         writingStyle: (s?.writingStyle ?? "professional") as VoiceCfg["writingStyle"],
         customStyle: s?.customStyle ?? "",

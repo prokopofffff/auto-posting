@@ -82,8 +82,18 @@ export async function runPipelineForProject(projectId: string): Promise<Pipeline
     return { ok: false, error: (e as Error).message };
   }
 
-  const article = await pickFreshArticle(projectId, topics);
-  if (!article) return { ok: true, skipped: true, reason: "No fresh news found for configured topics." };
+  const article = await pickFreshArticle(projectId, topics, {
+    resolved,
+    audience: settings.audience,
+    angle: settings.angle,
+  });
+  if (!article) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "No sufficiently relevant news found for the configured topics and audience.",
+    };
+  }
 
   const isPerPlatform = settings.voiceMode === "PER_PLATFORM";
   const result = await generatePost({
@@ -94,6 +104,8 @@ export async function runPipelineForProject(projectId: string): Promise<Pipeline
     voiceMode: isPerPlatform ? "PER_PLATFORM" : "UNIFIED",
     voice: isPerPlatform ? perPlatformVoice(settings, targets) : unifiedVoice(settings),
     factCheck: article.factCheck,
+    audience: settings.audience,
+    angle: settings.angle,
   }, resolved);
 
   if (result.posts.length === 0) return { ok: false, error: "Model returned no posts." };
@@ -124,7 +136,9 @@ export async function runPipelineForProject(projectId: string): Promise<Pipeline
       .from("Draft")
       .insert({
         projectId: project.id,
-        topic: topics[0],
+        // The relevance gate sets matchedTopic to a configured topic (or null);
+        // fall back to the first topic when it couldn't pin one down.
+        topic: article.matchedTopic ?? topics[0],
         sourceUrl: article.url,
         sourceTitle: article.title,
         contentByLang,

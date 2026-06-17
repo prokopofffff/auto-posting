@@ -33,4 +33,10 @@ export type FactCheck = {
   corroboratingSources: string[];
 };
 
-export type VerifiedArticle = NewsItem & { factCheck: FactCheck };
+export type VerifiedArticle = NewsItem & {
+  factCheck: FactCheck;
+  /** Set by the relevance gate: which configured topic this story best matches. */
+  matchedTopic?: string | null;
+  /** Set by the relevance gate: 0-100 fit score for the creator's interests. */
+  relevance?: number;
+};

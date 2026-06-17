@@ -16,6 +16,7 @@
 //                     no-op'ing. (The old NextAuth `handlers` export is gone; the
 //                     `/api/auth/[...nextauth]` route now returns 410 — see
 //                     src/auth-handlers.ts.)
+import { cache } from "react";
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
@@ -31,24 +32,35 @@ export type Session = {
   };
 };
 
-// Read the signed-in user from the cookie-bound Supabase server client. Uses
-// getUser() (not getSession()) so the access token is verified against the auth
-// server rather than trusted from the cookie. Returns `null` when signed out.
-async function getSession(): Promise<Session | null> {
+// Read the signed-in user from the cookie-bound Supabase server client.
+//
+// `getClaims()` verifies the access token's JWT — locally (no network round
+// trip) when the project uses asymmetric signing keys, and transparently
+// falling back to a `getUser()` auth-server check for legacy symmetric keys —
+// so it is never weaker than the previous `getUser()` call but is much faster
+// when local verification is available.
+//
+// Wrapped in React `cache()` so every `await auth()` in a single request — the
+// app layout and the rendered page both resolve the session — shares ONE
+// verification instead of each making its own. Returns `null` when signed out.
+const getSession = cache(async function getSession(): Promise<Session | null> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
+  const { data } = await supabase.auth.getClaims();
+  const claims = data?.claims;
+  if (!claims?.sub) return null;
+  const meta = (claims.user_metadata ?? {}) as {
+    name?: string;
+    avatar_url?: string;
+  };
   return {
     user: {
-      id: user.id,
-      email: user.email ?? null,
-      name: (user.user_metadata?.name as string | undefined) ?? null,
-      image: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+      id: claims.sub,
+      email: claims.email ?? null,
+      name: meta.name ?? null,
+      image: meta.avatar_url ?? null,
     },
   };
-}
+});
 
 // The request the proxy handler receives, carrying the resolved session on
 // `.auth` exactly like NextAuth's `NextAuthRequest` did, so src/proxy.ts keeps
@@ -86,10 +98,12 @@ const PORTED =
 
 // Variadic so the not-yet-ported call sites in auth-actions/oauth-actions keep
 // type-checking; any actual call throws so it surfaces loudly mid-migration.
-export async function signIn(..._args: unknown[]): Promise<never> {
+export async function signIn(...args: unknown[]): Promise<never> {
+  void args;
   throw new Error(PORTED);
 }
 
-export async function signOut(..._args: unknown[]): Promise<never> {
+export async function signOut(...args: unknown[]): Promise<never> {
+  void args;
   throw new Error(PORTED);
 }

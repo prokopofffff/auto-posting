@@ -62,6 +62,10 @@ export type GenerateInput = {
   voice: VoiceCfg | Partial<Record<Platform, VoiceCfg>>;
   /** Fact-check of the source article — drives hedging and confidence ceiling. */
   factCheck?: FactCheck;
+  /** Who the post is for (e.g. "software developers building fintech"). */
+  audience?: string | null;
+  /** The lens to frame stories through (e.g. "engineering & infra implications"). */
+  angle?: string | null;
 };
 
 /** Highest confidence we let an unverified story claim — forces human review. */
@@ -123,6 +127,23 @@ function voiceBlock(v: VoiceCfg, header: string): string {
   ].join("\n");
 }
 
+/**
+ * The lines naming who a post is for and the lens to frame it through. Shared by
+ * the generation prompt and the relevance scorer so the audience is described
+ * identically in both. Returns [] when neither field is set.
+ */
+function audienceAngleLines(
+  audience?: string | null,
+  angle?: string | null,
+): string[] {
+  const a = audience?.trim();
+  const g = angle?.trim();
+  const out: string[] = [];
+  if (a) out.push(`Write for: ${a}.`);
+  if (g) out.push(`Frame every story through this lens: ${g}.`);
+  return out;
+}
+
 function buildSystemPrompt(input: Omit<GenerateInput, "article">): string {
   const langLabels = input.languages.map((l) => LANG_LABEL[l] ?? l).join(", ");
 
@@ -139,6 +160,17 @@ function buildSystemPrompt(input: Omit<GenerateInput, "article">): string {
     input.topics.join(", "),
     "",
   ];
+
+  const audienceLines = audienceAngleLines(input.audience, input.angle);
+  if (audienceLines.length > 0) {
+    lines.push(
+      "## Audience & angle",
+      ...audienceLines,
+      "Choose what to emphasize, what to skip, and which implications to draw based on THIS audience.",
+      "If the article has no genuine relevance or insight for this audience, do NOT force a post: set its confidence to 25 or below so a human reviews it instead of publishing.",
+      "",
+    );
+  }
 
   if (input.voiceMode === "UNIFIED") {
     const v = input.voice as VoiceCfg;
@@ -262,6 +294,105 @@ export async function generatePost(
     costUsd: computeCostUsd(tokensInput, tokensOutput),
     confidence,
   };
+}
+
+// --- relevance gate --------------------------------------------------------
+// Before generation, the pipeline asks the model to rank fresh candidates for
+// how well they fit the creator's topics + audience + angle. This is what stops
+// "newest article from a broad keyword search" (e.g. a bank merger matched by
+// the word "fintech") from being posted just because it was recent.
+
+export type RelevanceScore = {
+  /** Index into the candidates array passed in. */
+  index: number;
+  /** 0-100; higher = more relevant and post-worthy for this creator. */
+  score: number;
+  /** Which configured topic it best matches (verbatim from `topics`), or null. */
+  topic: string | null;
+};
+
+export type RelevanceInput = {
+  topics: string[];
+  audience?: string | null;
+  angle?: string | null;
+  candidates: Pick<NewsItem, "title" | "summary" | "source">[];
+};
+
+/**
+ * Score candidate articles 0-100 for fit with the creator's interests. Returns
+ * one entry per candidate (best-effort; missing entries are treated as 0 by the
+ * caller). THROWS on a model/parse failure so the caller can fall back to its
+ * recency ordering rather than silently dropping every candidate.
+ */
+export async function scoreCandidates(
+  input: RelevanceInput,
+  resolved: ResolvedModel,
+): Promise<RelevanceScore[]> {
+  if (input.candidates.length === 0) return [];
+
+  const system = [
+    "You are a news editor choosing which stories a specific creator should post about.",
+    "Score each candidate article 0-100 for how relevant and post-worthy it is for THIS creator.",
+    "",
+    "## The creator",
+    `Topics of interest: ${input.topics.join(", ")}.`,
+    ...audienceAngleLines(input.audience, input.angle),
+    "",
+    "## Scoring rules",
+    "- 80-100: squarely on-topic AND genuinely interesting for this audience.",
+    "- 40-79: related but tangential, or on-topic but low insight.",
+    "- 0-39: off-topic. A story that merely CONTAINS a topic keyword but is really about something else (e.g. a local bank merger when the topic is 'fintech', or an earnings report when the topic is 'ai') belongs here.",
+    "- Reward stories that connect to MORE THAN ONE of the creator's topics.",
+    "- Judge by what the story is actually ABOUT, not by keyword overlap.",
+    "",
+    "## Output format",
+    "Return STRICT JSON only, no prose:",
+    '{ "scores": [ { "index": 0, "score": 85, "topic": "ai" }, ... ] }',
+    "Include one object per candidate. `topic` is the single best-matching topic from the list above, verbatim, or null if none fit.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const userMsg = input.candidates
+    .map((c, i) =>
+      [
+        `[${i}] ${c.title}`,
+        c.source ? `source: ${c.source}` : "",
+        c.summary ? `summary: ${c.summary.slice(0, 400)}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    )
+    .join("\n\n");
+
+  const { text } = await resolved.complete({
+    system,
+    user: userMsg,
+    maxTokens: 800,
+  });
+
+  const parsed = extractJson(text) as {
+    scores?: Array<{ index?: number; score?: number; topic?: string | null }>;
+  };
+  if (!parsed.scores || !Array.isArray(parsed.scores)) {
+    throw new Error("Relevance response missing 'scores' array.");
+  }
+  return parsed.scores
+    .filter(
+      (s): s is { index: number; score: number; topic?: string | null } =>
+        typeof s.index === "number" && typeof s.score === "number",
+    )
+    .map((s) => ({
+      index: s.index,
+      score: Math.max(0, Math.min(100, Math.round(s.score))),
+      // Only trust a topic the model echoed back from the configured list —
+      // anything else (a hallucinated or paraphrased topic) becomes null, so
+      // callers can use it as a draft label without re-validating.
+      topic:
+        typeof s.topic === "string" && input.topics.includes(s.topic)
+          ? s.topic
+          : null,
+    }));
 }
 
 export type AdHocInput = {

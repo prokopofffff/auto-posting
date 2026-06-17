@@ -494,7 +494,17 @@ export function DraftsPane({
                         href={active.sourceUrl}
                         target="_blank"
                         rel="noreferrer"
-                        style={{ borderBottom: "1px dashed var(--border-3)" }}
+                        title={active.sourceUrl}
+                        style={{
+                          borderBottom: "1px dashed var(--border-3)",
+                          // Crop long source URLs (e.g. Google News redirects)
+                          // to one line; full URL is on hover and on click.
+                          display: "block",
+                          maxWidth: "100%",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
                       >
                         {active.sourceUrl}
                       </a>

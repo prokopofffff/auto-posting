@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { auth } from "@/auth";
 import { supabaseAdmin } from "@/lib/supabase/service";
 import { count } from "@/lib/supabase/queries";
 import { computeScheduleInfo } from "@/lib/schedule";
@@ -23,11 +23,11 @@ export default async function AppLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/sign-in");
+  // Shares the request-cached session with the page below (one JWT verification
+  // per request instead of one here + one in the page's getCurrentUser).
+  const session = await auth();
+  if (!session) redirect("/sign-in");
+  const user = session.user;
 
   const [projects, current] = await Promise.all([
     listUserProjects(user.id),

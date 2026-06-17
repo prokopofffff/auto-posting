@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
+import { daysUntil } from "@/lib/format";
 
 export type ExpiringConnection = {
   id: string;
@@ -17,6 +18,9 @@ export function ExpiryBanner({
   projectId: string;
   connections: ExpiringConnection[];
 }) {
+  // Server component: renders once per request, so reading the wall clock here
+  // is intentional and deterministic for this render.
+  // eslint-disable-next-line react-hooks/purity
   const now = Date.now();
   const relevant = connections.filter((c) => {
     if (c.platform !== "LINKEDIN") return false;
@@ -34,7 +38,7 @@ export function ExpiryBanner({
   });
   const expMs = mostUrgent.expiresAt!.getTime();
   const expired = expMs < now;
-  const daysLeft = Math.max(0, Math.round((expMs - now) / 86_400_000));
+  const daysLeft = daysUntil(mostUrgent.expiresAt!, now);
 
   // Error (expired) vs warn (expiring soon) — both drawn from design tokens,
   // matching the .auth-error / .badge-pill.err|warn treatment used elsewhere.

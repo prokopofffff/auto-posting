@@ -386,6 +386,8 @@ export type Database = {
       }
       ProjectSettings: {
         Row: {
+          angle: string | null
+          audience: string | null
           bannedWords: string[] | null
           confidenceThreshold: number
           customStyle: string | null
@@ -408,6 +410,8 @@ export type Database = {
           writingStyle: string
         }
         Insert: {
+          angle?: string | null
+          audience?: string | null
           bannedWords?: string[] | null
           confidenceThreshold?: number
           customStyle?: string | null
@@ -430,6 +434,8 @@ export type Database = {
           writingStyle?: string
         }
         Update: {
+          angle?: string | null
+          audience?: string | null
           bannedWords?: string[] | null
           confidenceThreshold?: number
           customStyle?: string | null
