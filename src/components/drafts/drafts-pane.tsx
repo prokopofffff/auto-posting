@@ -10,6 +10,7 @@ import {
   Copy,
   Edit,
   ExternalLink,
+  Image as ImageIcon,
   RefreshCw,
   Send,
   ShieldAlert,
@@ -43,6 +44,7 @@ export type DraftItem = {
   topic: string;
   sourceTitle: string | null;
   sourceUrl: string | null;
+  imageUrl: string | null;
   targets: Platform[];
   status: Status;
   contentByLang: Record<string, string>;
@@ -336,6 +338,9 @@ export function DraftsPane({
                     <span>{firstLang}</span>
                     <span>·</span>
                     <span>{text.length}c</span>
+                    {d.imageUrl && (
+                      <ImageIcon size={11} style={{ marginLeft: 4 }} aria-label="has photo" />
+                    )}
                     <span style={{ marginLeft: "auto" }}>{fmtTimeOnly(d.createdAt)}</span>
                   </div>
                   <div className="title">{title}</div>
@@ -463,6 +468,23 @@ export function DraftsPane({
               </div>
 
               <div className="draft-detail-body scroll-area">
+                {active.imageUrl && (
+                  <div style={{ marginBottom: 14, maxWidth: 720 }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={active.imageUrl}
+                      alt="post attachment"
+                      style={{
+                        width: "100%",
+                        maxHeight: 360,
+                        objectFit: "cover",
+                        borderRadius: 6,
+                        border: "1px solid var(--border)",
+                        display: "block",
+                      }}
+                    />
+                  </div>
+                )}
                 {editing ? (
                   <textarea
                     className="textarea mono"
