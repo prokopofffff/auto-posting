@@ -33,11 +33,24 @@ import { moderate, type ModerationInput } from "./lib/moderation.ts";
 
 function isAuthorized(req: Request): boolean {
   const secret = Deno.env.get("CRON_SECRET");
-  if (!secret) return false;
+  // Diagnostic logging (visible in Supabase function logs) WITHOUT leaking the
+  // secret: the common 401 causes are (a) the CRON_SECRET secret was never set
+  // on the function, or (b) the caller's Bearer token doesn't match it. We log
+  // which case it is and a short prefix so a mismatch is obvious at a glance.
+  if (!secret) {
+    console.error("auth: CRON_SECRET is not set on this function");
+    return false;
+  }
   const auth = req.headers.get("authorization");
   if (auth === `Bearer ${secret}`) return true;
   const q = new URL(req.url).searchParams.get("secret");
-  return q === secret;
+  if (q === secret) return true;
+  const sent = auth?.startsWith("Bearer ") ? auth.slice(7) : (q ?? "");
+  console.error(
+    `auth: token mismatch (sent prefix="${sent.slice(0, 6)}…" len=${sent.length}, ` +
+      `expected prefix="${secret.slice(0, 6)}…" len=${secret.length})`,
+  );
+  return false;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -51,6 +64,8 @@ type Body = {
   action?: "tick" | "generate" | "compose" | "list-models" | "moderate";
   projectId?: string;
   input?: AdHocInput;
+  /** Manual topic override for the "generate" action (empty → all topics). */
+  topics?: string[];
 } & Partial<ModerationInput>;
 
 // The scheduled fan-out: run all due projects + flush due scheduled drafts.
@@ -93,7 +108,7 @@ Deno.serve(async (req: Request) => {
 
       case "generate": {
         if (!body.projectId) return json({ ok: false, error: "projectId required" }, 400);
-        const res = await runPipelineForProject(body.projectId);
+        const res = await runPipelineForProject(body.projectId, body.topics);
         return json(res);
       }
 

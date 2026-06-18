@@ -32,6 +32,12 @@ export function isDeepSeekModel(model: string | null | undefined): boolean {
  * — those are Anthropic-only concepts.
  */
 export function deepseekComplete(apiKey: string, model: string) {
+  // Every caller in this codebase (generation, relevance scoring, moderation)
+  // expects a strict-JSON reply, and all their prompts contain the word "JSON".
+  // deepseek-chat honors JSON mode, which removes the stray prose/markdown that
+  // otherwise breaks our regex JSON extraction. deepseek-reasoner does NOT
+  // support response_format, so we only set it for the chat model.
+  const jsonMode = model === "deepseek-chat";
   return async ({ system, user, maxTokens }: CompletionRequest): Promise<CompletionResult> => {
     const res = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
       method: "POST",
@@ -42,6 +48,7 @@ export function deepseekComplete(apiKey: string, model: string) {
       body: JSON.stringify({
         model,
         max_tokens: maxTokens,
+        ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },

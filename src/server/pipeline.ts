@@ -9,9 +9,15 @@ export type PipelineResult =
   | { ok: true; skipped: true; reason: string }
   | { ok: false; error: string };
 
-export async function runPipelineForProject(projectId: string): Promise<PipelineResult> {
+export async function runPipelineForProject(
+  projectId: string,
+  topics?: string[],
+): Promise<PipelineResult> {
   try {
-    return await invokeEdge<PipelineResult>("generate", { projectId });
+    // Only send `topics` when the caller actually narrowed the run, so the
+    // default scheduled behavior (all topics) is preserved by omission.
+    const payload = topics && topics.length > 0 ? { projectId, topics } : { projectId };
+    return await invokeEdge<PipelineResult>("generate", payload);
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }

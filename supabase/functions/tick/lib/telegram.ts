@@ -69,6 +69,23 @@ export function sendMessage(token: string, chatId: string | number, text: string
   });
 }
 
+// Telegram caps photo captions at 1024 chars. Callers that have longer text
+// send the photo first (optionally with a truncated caption) and the full text
+// as a follow-up sendMessage.
+export const TELEGRAM_CAPTION_LIMIT = 1024;
+
+export function sendPhoto(token: string, chatId: string | number, photo: string, opts?: {
+  caption?: string;
+  parseMode?: "HTML" | "MarkdownV2";
+}) {
+  return call<SendMessageResult>(token, "sendPhoto", {
+    chat_id: chatId,
+    photo,
+    caption: opts?.caption,
+    parse_mode: opts?.parseMode,
+  });
+}
+
 export function buildPostUrl(chat: SendMessageResult["chat"], messageId: number): string | null {
   if (chat.username) return `https://t.me/${chat.username}/${messageId}`;
   return null;

@@ -10,6 +10,7 @@ import {
 import { generatePost, type VoiceCfg } from "./claude.ts";
 import { resolveModel } from "./ai-credentials.ts";
 import { pickFreshArticle } from "./news.ts";
+import { searchPhoto } from "./pexels.ts";
 import { publishDraft } from "./publish.ts";
 import { computeScheduleInfo } from "./schedule.ts";
 import type { Platform, ProjectSettings } from "./types.ts";
@@ -49,7 +50,14 @@ function perPlatformVoice(
   return out;
 }
 
-export async function runPipelineForProject(projectId: string): Promise<PipelineResult> {
+export async function runPipelineForProject(
+  projectId: string,
+  // Manual topic override: when the user triggers "Generate now" for specific
+  // topics, only these are used to pick an article (intersected with the
+  // project's configured topics for safety). Omitted/empty → use all configured
+  // topics, the normal scheduled behavior.
+  topicsOverride?: string[],
+): Promise<PipelineResult> {
   const { data: project } = await selectProjectWithRelations(
     supabaseAdmin,
     projectId,
@@ -59,8 +67,19 @@ export async function runPipelineForProject(projectId: string): Promise<Pipeline
 
   const settings = project.settings;
   if (!settings) return { ok: false, error: "Project has no settings." };
-  const topics = settings.topics ?? [];
-  if (topics.length === 0) return { ok: true, skipped: true, reason: "No topics configured." };
+  const configured = settings.topics ?? [];
+  if (configured.length === 0) return { ok: true, skipped: true, reason: "No topics configured." };
+
+  // Manual selection narrows to the chosen topics; an empty/absent override
+  // falls back to everything configured. We intersect rather than trust the
+  // caller blindly so a stale UI selection can't inject an unconfigured topic.
+  const requested = (topicsOverride ?? []).map((t) => t.trim()).filter(Boolean);
+  const topics = requested.length > 0
+    ? configured.filter((t) => requested.includes(t))
+    : configured;
+  if (topics.length === 0) {
+    return { ok: true, skipped: true, reason: "None of the selected topics are configured." };
+  }
 
   const targets: Platform[] = [];
   if (project.connectedAccounts.some((c) => c.platform === "TELEGRAM")) targets.push("TELEGRAM");
@@ -95,6 +114,12 @@ export async function runPipelineForProject(projectId: string): Promise<Pipeline
     };
   }
 
+  // Kick off the (best-effort) stock-photo search now so its network latency
+  // overlaps the generation call below. searchPhoto never rejects (returns null
+  // on any failure), so the in-flight promise is safe to await later. Keyed on
+  // the matched topic so the image stays on-subject.
+  const imageP = searchPhoto(article.matchedTopic ?? topics[0] ?? "");
+
   const isPerPlatform = settings.voiceMode === "PER_PLATFORM";
   const result = await generatePost({
     article,
@@ -109,6 +134,10 @@ export async function runPipelineForProject(projectId: string): Promise<Pipeline
   }, resolved);
 
   if (result.posts.length === 0) return { ok: false, error: "Model returned no posts." };
+
+  // Resolve the photo started before generation (null when no PEXELS_API_KEY or
+  // no match, leaving the draft text-only).
+  const imageUrl = await imageP;
 
   // Build storage shape
   const contentByLang: Record<string, string> = {};
@@ -141,6 +170,7 @@ export async function runPipelineForProject(projectId: string): Promise<Pipeline
         topic: article.matchedTopic ?? topics[0],
         sourceUrl: article.url,
         sourceTitle: article.title,
+        imageUrl,
         contentByLang,
         // JSON columns take plain objects/null directly.
         contentByPlatform: isPerPlatform ? contentByPlatform : null,

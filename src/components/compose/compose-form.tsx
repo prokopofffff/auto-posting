@@ -9,6 +9,7 @@ import {
   Clock,
   FileText as DraftIcon,
   Hash,
+  ImagePlus,
   Link as LinkIcon,
   Plus,
   RefreshCw,
@@ -19,6 +20,7 @@ import {
 import {
   aiComposeDraftAction,
   composeSubmitAction,
+  uploadComposeImageAction,
 } from "@/server/compose-actions";
 import { PLATFORM_LIMITS } from "@/lib/platforms";
 import { PlatformIcon } from "@/components/platform-icon";
@@ -270,6 +272,8 @@ export function ComposeForm({
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("now");
   const [scheduleAt, setScheduleAt] = useState<string>(defaultScheduleAt());
   const [aiOpen, setAiOpen] = useState(false);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   const selectedChannels = channels.filter((c) => selected.has(c.platform));
   const selectedPlatforms = Array.from(selected);
@@ -302,6 +306,7 @@ export function ComposeForm({
       content: body,
       language,
       targets: selectedPlatforms,
+      imageUrl: imageUrl || undefined,
     };
     startTransition(async () => {
       const res = await composeSubmitAction(
@@ -331,6 +336,21 @@ export function ComposeForm({
       }
       router.refresh();
     });
+  }
+
+  function onPickImage(file: File | undefined) {
+    if (!file) return;
+    setUploading(true);
+    const fd = new FormData();
+    fd.set("projectId", projectId);
+    fd.set("file", file);
+    uploadComposeImageAction(fd)
+      .then((res) => {
+        if (!res.ok) toast.error(res.error);
+        else setImageUrl(res.url);
+      })
+      .catch((e) => toast.error((e as Error).message))
+      .finally(() => setUploading(false));
   }
 
   function applyAi(text: string, t: string, src: string) {
@@ -526,6 +546,53 @@ export function ComposeForm({
               }
             }}
           />
+
+          {/* image attachment */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "8px 12px",
+              borderTop: "1px solid var(--border)",
+            }}
+          >
+            {imageUrl ? (
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={imageUrl}
+                  alt="attachment preview"
+                  style={{ height: 44, width: 44, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)" }}
+                />
+                <span className="mono muted-2" style={{ fontSize: 11 }}>photo attached</span>
+                <button
+                  type="button"
+                  className="btn xs ghost danger"
+                  onClick={() => setImageUrl(null)}
+                  style={{ marginLeft: "auto" }}
+                >
+                  <X size={11} />
+                  <span>Remove</span>
+                </button>
+              </>
+            ) : (
+              <label className="btn sm ghost" style={{ cursor: uploading ? "wait" : "pointer" }}>
+                <ImagePlus size={12} />
+                <span>{uploading ? "Uploading…" : "Add photo"}</span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  style={{ display: "none" }}
+                  disabled={uploading}
+                  onChange={(e) => {
+                    onPickImage(e.target.files?.[0]);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            )}
+          </div>
 
           {/* footer */}
           <div
