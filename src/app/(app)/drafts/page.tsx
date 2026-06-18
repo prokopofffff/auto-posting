@@ -96,6 +96,7 @@ export default async function DraftsPage({
     topic: d.topic,
     sourceTitle: d.sourceTitle,
     sourceUrl: d.sourceUrl,
+    imageUrl: d.imageUrl,
     targets: (d.targets ?? []) as ("LINKEDIN" | "TELEGRAM")[],
     status: d.status as Status,
     contentByLang: d.contentByLang as Record<string, string>,
