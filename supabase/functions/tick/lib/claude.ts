@@ -28,15 +28,40 @@ function computeCostUsd(tokensInput: number, tokensOutput: number): number {
 // (./ai-credentials.ts), passed in by callers — no env-based singleton, and
 // provider-agnostic (Claude or DeepSeek) via its `complete` closure.
 
+// Each directive is a small spec, not a label: it fixes the hook, the structure,
+// the sentence shape, and what the style must include or avoid. Concrete rules
+// make the difference between styles visible in the output (and steer DeepSeek,
+// which follows terse abstract adjectives less reliably than Claude). These are
+// platform-agnostic and combine with the audience/angle block and char limits.
 const STYLE_DIRECTIVES: Record<string, string> = {
-  professional:
-    "Voice: polished, credible, industry-insider. Use precise language. No fluff. Occasional dry wit is allowed.",
-  casual:
-    "Voice: friendly, conversational, direct. Use contractions. Speak like a person, not a press release.",
-  technical:
-    "Voice: deep-dive, respectful of technical readers. Include concrete details, numbers, and mechanisms. No hand-waving.",
-  provocative:
-    "Voice: sharp opinion, hot-take, contrarian where warranted. Lead with a bold claim. Back it up briefly.",
+  professional: [
+    "Voice: a senior operator sharing a considered take with peers. Credible, precise, never breathless.",
+    "- Open with a crisp observation or a hard fact. Never \"I'm excited to share\", never a rhetorical question.",
+    "- Structure: hook → what happened (1-2 sentences) → why it matters to the reader → one forward-looking line.",
+    "- One idea per sentence; short to medium length. No buzzwords (synergy, leverage, game-changer), no emoji, at most one exclamation mark.",
+    "- Make exactly ONE clear point. Dry wit in small doses is fine; hype is not.",
+  ].join("\n"),
+  casual: [
+    "Voice: talking to a smart friend who doesn't work in your field. Warm, direct, plain-spoken.",
+    "- Open mid-thought, as if continuing a conversation. Use contractions and everyday words.",
+    "- Short paragraphs (1-2 sentences) with white space between them. Vary sentence length; an occasional fragment is good.",
+    "- Use \"you\" and \"I\". One or two emoji are fine if they fit naturally — never forced.",
+    "- Explain any jargon in passing. End on a takeaway or a genuine question, not a salesy call-to-action.",
+  ].join("\n"),
+  technical: [
+    "Voice: an engineer explaining to peers who respect their time. Precise, concrete, no hand-waving.",
+    "- Open with the specific thing that changed — the mechanism, number, or result — not a generic framing.",
+    "- Include at least one concrete detail: a figure, version, benchmark, limitation, or a how-it-works step.",
+    "- Name the trade-off or caveat honestly: what it doesn't solve, what it costs.",
+    "- Assume domain literacy — don't define the basics — but never bluff details you don't have. Plain prose, no marketing adjectives.",
+  ].join("\n"),
+  provocative: [
+    "Voice: a sharp contrarian who has earned a strong opinion. Bold, but not clickbait.",
+    "- Open with the boldest defensible claim in one punchy line. No hedging, no \"some might say\".",
+    "- Back it with the single strongest reason or fact — one, not five. Concede the obvious counter-point in a line, then dismiss it.",
+    "- Short, declarative sentences. Confident verbs. No emoji, no exclamation-mark spam.",
+    "- Take a real position someone could disagree with. End on a line that makes the reader want to argue or share.",
+  ].join("\n"),
   custom: "",
 };
 

@@ -5,6 +5,7 @@ const AUTHORIZE_URL = "https://www.linkedin.com/oauth/v2/authorization";
 const TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken";
 const USERINFO_URL = "https://api.linkedin.com/v2/userinfo";
 const POSTS_URL = "https://api.linkedin.com/rest/posts";
+const IMAGES_URL = "https://api.linkedin.com/rest/images";
 const LINKEDIN_VERSION = "202605";
 
 const SCOPES = ["openid", "profile", "w_member_social"];
@@ -98,10 +99,78 @@ export type LinkedInPostResult = {
   url: string | null;
 };
 
+/**
+ * Upload an image to LinkedIn and return its `urn:li:image:...` URN, ready to
+ * attach to a post. Per LinkedIn's REST Images API: initialize an upload (which
+ * hands back a one-time uploadUrl + the image URN) and fetch the source bytes —
+ * these two are independent, so we run them concurrently — then PUT the bytes
+ * to that URL. Network failures surface as transient. Callers should wrap this
+ * in their own retry SEPARATELY from createPost, so a failed post doesn't
+ * re-upload (and orphan) the image.
+ */
+export async function uploadImage(
+  accessToken: string,
+  ownerUrn: string,
+  imageUrl: string,
+): Promise<string> {
+  const bytesP = (async () => {
+    try {
+      const imgRes = await fetch(imageUrl, { cache: "no-store" });
+      if (!imgRes.ok) throw new Error(`fetch image failed: ${imgRes.status}`);
+      return await imgRes.arrayBuffer();
+    } catch (e) {
+      throw new TransientPublishError(`Could not fetch image to upload: ${(e as Error).message}`);
+    }
+  })();
+  const initP = (async () => {
+    const initRes = await fetch(`${IMAGES_URL}?action=initializeUpload`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+        "LinkedIn-Version": LINKEDIN_VERSION,
+        "X-Restli-Protocol-Version": "2.0.0",
+      },
+      body: JSON.stringify({ initializeUploadRequest: { owner: ownerUrn } }),
+      cache: "no-store",
+    });
+    if (!initRes.ok) {
+      const txt = await initRes.text();
+      throw new Error(`LinkedIn image init failed: ${initRes.status} ${txt}`);
+    }
+    const init = (await initRes.json()) as { value?: { uploadUrl?: string; image?: string } };
+    if (!init.value?.uploadUrl || !init.value?.image) {
+      throw new Error("LinkedIn image init returned no upload URL.");
+    }
+    return { uploadUrl: init.value.uploadUrl, imageUrn: init.value.image };
+  })();
+
+  const [bytes, init] = await Promise.all([bytesP, initP]);
+
+  const put = await fetch(init.uploadUrl, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${accessToken}` },
+    body: bytes,
+    cache: "no-store",
+  });
+  if (!put.ok) {
+    if (put.status === 429 || put.status >= 500) {
+      throw new TransientPublishError(`LinkedIn image upload failed: ${put.status}`, {
+        status: put.status,
+      });
+    }
+    throw new Error(`LinkedIn image upload failed: ${put.status}`);
+  }
+  return init.imageUrn;
+}
+
 export async function createPost(
   accessToken: string,
   authorUrn: string,
   text: string,
+  // An already-uploaded `urn:li:image:...` (see uploadImage). Kept separate from
+  // the upload so the caller can retry the post without re-uploading the image.
+  imageUrn?: string | null,
 ): Promise<LinkedInPostResult> {
   let res: Response;
   try {
@@ -122,6 +191,7 @@ export async function createPost(
           targetEntities: [],
           thirdPartyDistributionChannels: [],
         },
+        ...(imageUrn ? { content: { media: { id: imageUrn } } } : {}),
         lifecycleState: "PUBLISHED",
         isReshareDisabledByAuthor: false,
       }),

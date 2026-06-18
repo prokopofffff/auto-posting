@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase/service";
 import { unwrap } from "@/lib/supabase/queries";
 import { getCurrentUser, userOwnsProject } from "@/server/project";
+import { runPipelineForProject } from "@/server/pipeline";
 
 const MAX_TOPICS = 100;
 const MAX_TOPIC_LEN = 80;
@@ -75,6 +76,31 @@ export async function removeTopicsAction(projectId: string, names: string[]) {
   revalidatePath("/topics");
   revalidatePath("/dashboard");
   return { ok: true as const, removed: topics.length - next.length };
+}
+
+/**
+ * Generate a draft now for a specific set of topics the user picked, instead of
+ * waiting for the scheduled run to choose across all topics. Verifies ownership,
+ * then reuses the same edge pipeline as the scheduler (with a topic override).
+ */
+export async function generateForTopicsAction(projectId: string, topics: string[]) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not signed in." };
+  if (!(await userOwnsProject(user.id, projectId))) {
+    return { ok: false as const, error: "Project not found." };
+  }
+  const picked = Array.from(new Set(topics.map((t) => t.trim()).filter(Boolean)));
+  if (picked.length === 0) return { ok: false as const, error: "Pick at least one topic." };
+
+  const res = await runPipelineForProject(projectId, picked);
+  revalidatePath("/topics");
+  revalidatePath("/drafts");
+  revalidatePath("/dashboard");
+  if (!res.ok) return { ok: false as const, error: res.error };
+  if ("skipped" in res && res.skipped) {
+    return { ok: true as const, skipped: true, reason: res.reason };
+  }
+  return { ok: true as const, draftId: res.draftId, published: res.published };
 }
 
 export async function bulkImportTopicsAction(projectId: string, raw: string) {

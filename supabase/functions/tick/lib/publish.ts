@@ -4,8 +4,8 @@
 // only import paths differ.
 import { selectDraftWithProject, supabaseAdmin, unwrap } from "./supabase.ts";
 import { decrypt } from "./crypto.ts";
-import { buildPostUrl, sendMessage } from "./telegram.ts";
-import { createPost as createLinkedInPost } from "./linkedin.ts";
+import { buildPostUrl, sendMessage, sendPhoto, TELEGRAM_CAPTION_LIMIT } from "./telegram.ts";
+import { createPost as createLinkedInPost, uploadImage as uploadLinkedInImage } from "./linkedin.ts";
 import { getValidLinkedInAccessToken } from "./linkedin-tokens.ts";
 import { moderate } from "./moderation.ts";
 import type { ResolvedModel } from "./ai-credentials.ts";
@@ -62,17 +62,28 @@ async function publishToTelegram(
   conn: ConnectedAccount,
   content: DraftContent,
   contentByPlatform: DraftContentByPlatform | null,
+  imageUrl: string | null,
 ) {
   if (!conn.accessToken) return null;
   const picked = pickPlatformContent(contentByPlatform, content, "TELEGRAM");
   if (!picked) return null;
   const token = await decrypt(conn.accessToken);
   try {
+    // With a photo: send it with the text as a caption when it fits, otherwise
+    // send the photo uncaptioned and the full text as a follow-up message.
+    const captionFits = picked.text.length <= TELEGRAM_CAPTION_LIMIT;
     const res = await withRetry(() =>
-      sendMessage(token, conn.externalId, picked.text, {
-        disableWebPagePreview: false,
-      }),
+      imageUrl
+        ? sendPhoto(token, conn.externalId, imageUrl, {
+            caption: captionFits ? picked.text : undefined,
+          })
+        : sendMessage(token, conn.externalId, picked.text, { disableWebPagePreview: false }),
     );
+    if (imageUrl && !captionFits) {
+      await withRetry(() =>
+        sendMessage(token, conn.externalId, picked.text, { disableWebPagePreview: false }),
+      );
+    }
     const url = buildPostUrl(res.chat, res.message_id);
     await unwrap(
       supabaseAdmin.from("Post").insert({
@@ -81,6 +92,7 @@ async function publishToTelegram(
         platform: "TELEGRAM",
         language: picked.lang,
         content: picked.text,
+        imageUrl,
         externalId: String(res.message_id),
         externalUrl: url,
       }),
@@ -105,6 +117,7 @@ async function publishToLinkedIn(
   conn: ConnectedAccount,
   content: DraftContent,
   contentByPlatform: DraftContentByPlatform | null,
+  imageUrl: string | null,
 ) {
   if (!conn.accessToken) return null;
   const picked = pickPlatformContent(contentByPlatform, content, "LINKEDIN");
@@ -123,8 +136,13 @@ async function publishToLinkedIn(
     return null;
   }
   try {
+    // Upload the image under its own retry so a transient post failure doesn't
+    // re-upload it (which would orphan an image asset on LinkedIn each retry).
+    const imageUrn = imageUrl
+      ? await withRetry(() => uploadLinkedInImage(token, conn.externalId, imageUrl))
+      : null;
     const res = await withRetry(() =>
-      createLinkedInPost(token, conn.externalId, picked.text),
+      createLinkedInPost(token, conn.externalId, picked.text, imageUrn),
     );
     await unwrap(
       supabaseAdmin.from("Post").insert({
@@ -133,6 +151,7 @@ async function publishToLinkedIn(
         platform: "LINKEDIN",
         language: picked.lang,
         content: picked.text,
+        imageUrl,
         externalId: res.id || null,
         externalUrl: res.url,
       }),
@@ -167,6 +186,7 @@ export async function publishDraft(
   const content = draft.contentByLang as DraftContent;
   const contentByPlatform =
     (draft.contentByPlatform as DraftContentByPlatform | null) ?? null;
+  const imageUrl = draft.imageUrl ?? null;
 
   const settings = draft.project.settings;
   if (settings) {
@@ -205,9 +225,9 @@ export async function publishDraft(
     for (const conn of conns) {
       const pub =
         platform === "TELEGRAM"
-          ? await publishToTelegram(draft.projectId, draft.id, conn, content, contentByPlatform)
+          ? await publishToTelegram(draft.projectId, draft.id, conn, content, contentByPlatform, imageUrl)
           : platform === "LINKEDIN"
-          ? await publishToLinkedIn(draft.projectId, draft.id, conn, content, contentByPlatform)
+          ? await publishToLinkedIn(draft.projectId, draft.id, conn, content, contentByPlatform, imageUrl)
           : null;
       if (pub) posts.push(pub);
     }

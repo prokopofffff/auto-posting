@@ -138,6 +138,7 @@ export type Database = {
           createdAt: string;
           factVerdict: Database["public"]["Enums"]["FactVerdict"] | null;
           id: string;
+          imageUrl: string | null;
           projectId: string;
           scheduledAt: string | null;
           sourceTitle: string | null;
@@ -159,6 +160,7 @@ export type Database = {
           createdAt?: string;
           factVerdict?: Database["public"]["Enums"]["FactVerdict"] | null;
           id?: string;
+          imageUrl?: string | null;
           projectId: string;
           scheduledAt?: string | null;
           sourceTitle?: string | null;
@@ -180,6 +182,7 @@ export type Database = {
           createdAt?: string;
           factVerdict?: Database["public"]["Enums"]["FactVerdict"] | null;
           id?: string;
+          imageUrl?: string | null;
           projectId?: string;
           scheduledAt?: string | null;
           sourceTitle?: string | null;
@@ -284,6 +287,7 @@ export type Database = {
           externalId: string | null;
           externalUrl: string | null;
           id: string;
+          imageUrl: string | null;
           language: string;
           platform: Database["public"]["Enums"]["Platform"];
           projectId: string;
@@ -296,6 +300,7 @@ export type Database = {
           externalId?: string | null;
           externalUrl?: string | null;
           id?: string;
+          imageUrl?: string | null;
           language: string;
           platform: Database["public"]["Enums"]["Platform"];
           projectId: string;
@@ -308,6 +313,7 @@ export type Database = {
           externalId?: string | null;
           externalUrl?: string | null;
           id?: string;
+          imageUrl?: string | null;
           language?: string;
           platform?: Database["public"]["Enums"]["Platform"];
           projectId?: string;

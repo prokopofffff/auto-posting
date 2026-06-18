@@ -10,6 +10,7 @@ import {
   Hash,
   Search,
   Shield,
+  Sparkles,
   TextCursor,
   Trash2,
   Upload,
@@ -18,6 +19,7 @@ import {
 import {
   addTopicAction,
   bulkImportTopicsAction,
+  generateForTopicsAction,
   removeTopicsAction,
 } from "@/server/topics-actions";
 import { relAgo } from "@/lib/format";
@@ -115,6 +117,8 @@ export function TopicsTable({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [genPending, startGen] = useTransition();
+  const [genName, setGenName] = useState<string | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
   const [newName, setNewName] = useState("");
@@ -175,6 +179,28 @@ export function TopicsTable({
         return;
       }
       toast.success(`Removed ${res.removed} topic${res.removed === 1 ? "" : "s"}.`);
+      setSel(new Set());
+      router.refresh();
+    });
+  }
+
+  function generate(names: string[], label: string) {
+    if (names.length === 0 || genPending) return;
+    setGenName(label);
+    startGen(async () => {
+      const res = await generateForTopicsAction(projectId, names);
+      setGenName(null);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      if ("skipped" in res && res.skipped) {
+        toast.info(res.reason);
+        return;
+      }
+      toast.success(
+        res.published ? "Generated and published a post." : "Draft generated — review it in Drafts.",
+      );
       setSel(new Set());
       router.refresh();
     });
@@ -276,15 +302,27 @@ export function TopicsTable({
           </span>
 
           {sel.size > 0 && (
-            <button
-              type="button"
-              className="btn xs ghost danger"
-              onClick={deleteSelected}
-              disabled={pending}
-            >
-              <Trash2 size={11} />
-              <span>Delete</span>
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn xs ghost"
+                onClick={() => generate(Array.from(sel), `${sel.size} topics`)}
+                disabled={genPending}
+                title="Generate a draft now from the selected topics"
+              >
+                <Sparkles size={11} />
+                <span>{genPending ? "Generating…" : "Generate"}</span>
+              </button>
+              <button
+                type="button"
+                className="btn xs ghost danger"
+                onClick={deleteSelected}
+                disabled={pending}
+              >
+                <Trash2 size={11} />
+                <span>Delete</span>
+              </button>
+            </>
           )}
         </div>
 
@@ -321,7 +359,7 @@ export function TopicsTable({
                   <Shield size={11} style={{ marginRight: 4, verticalAlign: -2 }} />
                   status
                 </th>
-                <th style={{ width: 40 }}></th>
+                <th style={{ width: 76 }}></th>
               </tr>
             </thead>
             <tbody>
@@ -352,21 +390,36 @@ export function TopicsTable({
                     <StatusBadge s={r.status} />
                   </td>
                   <td>
-                    <button
-                      type="button"
-                      className="btn icon xs ghost danger"
-                      onClick={() => {
-                        startTransition(async () => {
-                          const res = await removeTopicsAction(projectId, [r.name]);
-                          if (!res.ok) toast.error(res.error);
-                          else router.refresh();
-                        });
-                      }}
-                      aria-label={`Remove ${r.name}`}
-                      title="Remove"
-                    >
-                      <Trash2 size={12} />
-                    </button>
+                    <div style={{ display: "flex", gap: 2 }}>
+                      <button
+                        type="button"
+                        className="btn icon xs ghost"
+                        onClick={() => generate([r.name], r.name)}
+                        disabled={genPending}
+                        aria-label={`Generate a post for ${r.name}`}
+                        title="Generate a post now for this topic"
+                      >
+                        <Sparkles
+                          size={12}
+                          style={genPending && genName === r.name ? { animation: "spin 1s linear infinite" } : undefined}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn icon xs ghost danger"
+                        onClick={() => {
+                          startTransition(async () => {
+                            const res = await removeTopicsAction(projectId, [r.name]);
+                            if (!res.ok) toast.error(res.error);
+                            else router.refresh();
+                          });
+                        }}
+                        aria-label={`Remove ${r.name}`}
+                        title="Remove"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
