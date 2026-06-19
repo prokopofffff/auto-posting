@@ -149,6 +149,7 @@ export type Database = {
           tokensInput: number | null;
           tokensOutput: number | null;
           topic: string;
+          topics: string[];
           updatedAt: string;
         };
         Insert: {
@@ -171,6 +172,7 @@ export type Database = {
           tokensInput?: number | null;
           tokensOutput?: number | null;
           topic: string;
+          topics?: string[];
           updatedAt?: string;
         };
         Update: {
@@ -193,6 +195,7 @@ export type Database = {
           tokensInput?: number | null;
           tokensOutput?: number | null;
           topic?: string;
+          topics?: string[];
           updatedAt?: string;
         };
         Relationships: [

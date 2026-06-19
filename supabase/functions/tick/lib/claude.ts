@@ -332,8 +332,12 @@ export type RelevanceScore = {
   index: number;
   /** 0-100; higher = more relevant and post-worthy for this creator. */
   score: number;
-  /** Which configured topic it best matches (verbatim from `topics`), or null. */
-  topic: string | null;
+  /**
+   * Every configured topic the story genuinely relates to (verbatim from
+   * `topics`), most central first. Empty when nothing fits. The caller ranks
+   * intersection-first, so a story matching two topics beats a one-topic story.
+   */
+  topics: string[];
 };
 
 export type RelevanceInput = {
@@ -367,13 +371,13 @@ export async function scoreCandidates(
     "- 80-100: squarely on-topic AND genuinely interesting for this audience.",
     "- 40-79: related but tangential, or on-topic but low insight.",
     "- 0-39: off-topic. A story that merely CONTAINS a topic keyword but is really about something else (e.g. a local bank merger when the topic is 'fintech', or an earnings report when the topic is 'ai') belongs here.",
-    "- Reward stories that connect to MORE THAN ONE of the creator's topics.",
+    "- INTERSECTION MATTERS MOST: stories that genuinely sit at the intersection of SEVERAL of the creator's topics are the best fits — list every topic each story relates to so the picker can prefer the widest overlap.",
     "- Judge by what the story is actually ABOUT, not by keyword overlap.",
     "",
     "## Output format",
     "Return STRICT JSON only, no prose:",
-    '{ "scores": [ { "index": 0, "score": 85, "topic": "ai" }, ... ] }',
-    "Include one object per candidate. `topic` is the single best-matching topic from the list above, verbatim, or null if none fit.",
+    '{ "scores": [ { "index": 0, "score": 85, "topics": ["ai", "fintech"] }, ... ] }',
+    "Include one object per candidate. `topics` lists EVERY topic from the list above that the story genuinely relates to, verbatim, most central first — use [] if none fit. Be honest: only include a topic the story is actually about, not one it merely name-drops.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -397,27 +401,36 @@ export async function scoreCandidates(
   });
 
   const parsed = extractJson(text) as {
-    scores?: Array<{ index?: number; score?: number; topic?: string | null }>;
+    scores?: Array<{ index?: number; score?: number; topics?: unknown }>;
   };
   if (!parsed.scores || !Array.isArray(parsed.scores)) {
     throw new Error("Relevance response missing 'scores' array.");
   }
+  const configured = new Set(input.topics);
   return parsed.scores
     .filter(
-      (s): s is { index: number; score: number; topic?: string | null } =>
+      (s): s is { index: number; score: number; topics?: unknown } =>
         typeof s.index === "number" && typeof s.score === "number",
     )
-    .map((s) => ({
-      index: s.index,
-      score: Math.max(0, Math.min(100, Math.round(s.score))),
-      // Only trust a topic the model echoed back from the configured list —
-      // anything else (a hallucinated or paraphrased topic) becomes null, so
-      // callers can use it as a draft label without re-validating.
-      topic:
-        typeof s.topic === "string" && input.topics.includes(s.topic)
-          ? s.topic
-          : null,
-    }));
+    .map((s) => {
+      // Only trust topics the model echoed back from the configured list —
+      // anything else (hallucinated or paraphrased) is dropped, and we de-dupe
+      // so a repeated topic can't inflate the intersection count. Order is
+      // preserved (most central first) so topics[0] is the primary label.
+      const topics: string[] = [];
+      if (Array.isArray(s.topics)) {
+        for (const t of s.topics) {
+          if (typeof t === "string" && configured.has(t) && !topics.includes(t)) {
+            topics.push(t);
+          }
+        }
+      }
+      return {
+        index: s.index,
+        score: Math.max(0, Math.min(100, Math.round(s.score))),
+        topics,
+      };
+    });
 }
 
 export type AdHocInput = {

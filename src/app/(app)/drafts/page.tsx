@@ -94,6 +94,7 @@ export default async function DraftsPage({
   const items: DraftItem[] = drafts.map((d) => ({
     id: d.id,
     topic: d.topic,
+    topics: (d.topics ?? []) as string[],
     sourceTitle: d.sourceTitle,
     sourceUrl: d.sourceUrl,
     imageUrl: d.imageUrl,

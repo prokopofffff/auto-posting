@@ -93,6 +93,9 @@ export async function composeSubmitAction(input: ComposeActionInput) {
       .insert({
         projectId: data.projectId,
         topic: data.topic,
+        // Manually composed drafts have a single topic; mirror it into the
+        // topics[] set so the column is consistent with pipeline-generated ones.
+        topics: data.topic ? [data.topic] : [],
         sourceUrl: data.sourceUrl || null,
         imageUrl: data.imageUrl || null,
         contentByLang: { [data.language]: data.content },

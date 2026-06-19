@@ -35,8 +35,12 @@ export type FactCheck = {
 
 export type VerifiedArticle = NewsItem & {
   factCheck: FactCheck;
-  /** Set by the relevance gate: which configured topic this story best matches. */
+  /** Set by the relevance gate: which configured topic this story best matches
+   * (the primary/most central one, == matchedTopics[0]). */
   matchedTopic?: string | null;
+  /** Set by the relevance gate: every configured topic this story relates to
+   * (the intersection), most central first. */
+  matchedTopics?: string[];
   /** Set by the relevance gate: 0-100 fit score for the creator's interests. */
   relevance?: number;
 };

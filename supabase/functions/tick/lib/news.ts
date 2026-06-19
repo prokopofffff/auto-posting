@@ -352,15 +352,18 @@ export type PickOptions = {
   angle?: string | null;
 };
 
-type RankedCandidate = { item: NewsItem; score: number; topic: string | null };
+type RankedCandidate = { item: NewsItem; score: number; topics: string[] };
 
 /**
  * Order the candidate pool by fit with the creator's topics + audience + angle.
- * With a model: score each, drop anything below RELEVANCE_FLOOR, sort best-first
- * (so a recent-but-off-topic story loses to a slightly older on-topic one). An
- * empty result means "nothing relevant enough — skip this run". Without a model
- * (or if scoring fails) we keep the existing recency order and apply no floor,
- * so the gate can never make generation strictly worse than before.
+ * With a model: score each, drop anything below RELEVANCE_FLOOR, then sort
+ * INTERSECTION-FIRST — a story matching more of the creator's topics wins, with
+ * relevance score breaking ties. This makes "pick the story sitting at the
+ * intersection of the selected topics" the default when several topics are in
+ * play, while a single-topic run still just sorts by score. An empty result
+ * means "nothing relevant enough — skip this run". Without a model (or if
+ * scoring fails) we keep the existing recency order and apply no floor, so the
+ * gate can never make generation strictly worse than before.
  */
 async function rankByRelevance(
   pool: NewsItem[],
@@ -370,7 +373,7 @@ async function rankByRelevance(
   // No model (or scoring throws below) → keep the existing recency order and
   // apply no floor, so the gate can never make generation worse than before.
   const recencyOrder = (): RankedCandidate[] =>
-    pool.map((item) => ({ item, score: 0, topic: null }));
+    pool.map((item) => ({ item, score: 0, topics: [] }));
   if (!opts.resolved) return recencyOrder();
 
   try {
@@ -382,10 +385,11 @@ async function rankByRelevance(
     return pool
       .map((item, i) => {
         const s = byIndex.get(i);
-        return { item, score: s?.score ?? 0, topic: s?.topic ?? null };
+        return { item, score: s?.score ?? 0, topics: s?.topics ?? [] };
       })
       .filter((r) => r.score >= RELEVANCE_FLOOR)
-      .sort((a, b) => b.score - a.score);
+      // Widest topic intersection first; relevance score breaks ties.
+      .sort((a, b) => b.topics.length - a.topics.length || b.score - a.score);
   } catch {
     return recencyOrder();
   }
@@ -434,7 +438,10 @@ export async function pickFreshArticle(
   const slice = ranked.slice(0, MAX_VERIFY);
   const pick = (idx: number, article: VerifiedArticle): VerifiedArticle => ({
     ...article,
-    matchedTopic: slice[idx].topic,
+    // Full intersection set, most central first; matchedTopic stays the primary
+    // (first) topic so single-topic consumers keep working.
+    matchedTopics: slice[idx].topics,
+    matchedTopic: slice[idx].topics[0] ?? null,
     relevance: slice[idx].score,
   });
 
