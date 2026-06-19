@@ -168,6 +168,15 @@ export async function runPipelineForProject(
         // The relevance gate sets matchedTopic to a configured topic (or null);
         // fall back to the first topic when it couldn't pin one down.
         topic: article.matchedTopic ?? topics[0],
+        // Full intersection set the story sits at. Falls back to the single
+        // matched topic, then the first selected topic, so the column is never
+        // empty for a generated draft.
+        topics:
+          article.matchedTopics && article.matchedTopics.length > 0
+            ? article.matchedTopics
+            : article.matchedTopic
+            ? [article.matchedTopic]
+            : [topics[0]],
         sourceUrl: article.url,
         sourceTitle: article.title,
         imageUrl,

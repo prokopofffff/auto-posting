@@ -42,6 +42,8 @@ type FactVerdict = "TRUSTED" | "CORROBORATED" | "UNVERIFIED";
 export type DraftItem = {
   id: string;
   topic: string;
+  /** Full intersection set the story was picked for; topic == topics[0]. */
+  topics: string[];
   sourceTitle: string | null;
   sourceUrl: string | null;
   imageUrl: string | null;
@@ -345,8 +347,12 @@ export function DraftsPane({
                   </div>
                   <div className="title">{title}</div>
                   <div className="snippet">{firstLine}</div>
-                  <div style={{ display: "flex", gap: 4, marginTop: 2 }}>
-                    <span className="tag dot">{d.topic}</span>
+                  <div style={{ display: "flex", gap: 4, marginTop: 2, flexWrap: "wrap" }}>
+                    {(d.topics.length > 0 ? d.topics : [d.topic]).map((t) => (
+                      <span key={t} className="tag dot">
+                        {t}
+                      </span>
+                    ))}
                   </div>
                 </div>
               );
@@ -611,7 +617,11 @@ export function DraftsPane({
                     style={{ fontSize: 11, color: "var(--fg-2)", lineHeight: 1.7 }}
                   >
                     <div>
-                      <span className="muted">topic</span> &nbsp; {active.topic}
+                      <span className="muted">
+                        {(active.topics.length > 1 ? "topics" : "topic")}
+                      </span>{" "}
+                      &nbsp;{" "}
+                      {(active.topics.length > 0 ? active.topics : [active.topic]).join(", ")}
                     </div>
                     <div>
                       <span className="muted">created</span> &nbsp;{" "}
