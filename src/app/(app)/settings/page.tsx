@@ -78,6 +78,7 @@ export default async function SettingsPage() {
         writingStyle: (s?.writingStyle ?? "professional") as VoiceCfg["writingStyle"],
         customStyle: s?.customStyle ?? "",
         intervalDays: s?.intervalDays ?? 1,
+        postsPerDay: s?.postsPerDay ?? 1,
         preferredHour: s?.preferredHour ?? 9,
         timezone: s?.timezone ?? "UTC",
         mode: (s?.mode ?? "MANUAL") as "MANUAL" | "AUTOPILOT" | "HYBRID",

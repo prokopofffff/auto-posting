@@ -5,7 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase/service";
 import { unwrap } from "@/lib/supabase/queries";
 import { getCurrentUser, userOwnsProject } from "@/server/project";
 import { publishDraft } from "@/server/publish";
-import { runPipelineForProject } from "@/server/pipeline";
+import { regenerateDraft, runPipelineForProject } from "@/server/pipeline";
 import type { Platform } from "@/lib/types";
 
 async function assertDraftOwnership(draftId: string) {
@@ -57,6 +57,16 @@ export async function updateDraftContentAction(
   );
   revalidatePath("/drafts");
   return { ok: true as const };
+}
+
+export async function regenerateDraftAction(draftId: string) {
+  const owned = await assertDraftOwnership(draftId);
+  if (!owned.ok) return owned;
+  // The edge function reloads the draft + project and rewrites the copy against
+  // the same source story; it resets status to PENDING on success.
+  const res = await regenerateDraft(owned.draft.projectId, draftId);
+  revalidatePath("/drafts");
+  return res.ok ? { ok: true as const } : { ok: false as const, error: res.error };
 }
 
 export async function retryDraftAction(draftId: string) {

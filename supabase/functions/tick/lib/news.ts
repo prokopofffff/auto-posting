@@ -400,35 +400,49 @@ export async function pickFreshArticle(
   topics: string[],
   opts: PickOptions = {},
 ): Promise<VerifiedArticle | null> {
-  // The news fetch and the "what have we already posted" lookup are independent,
-  // so run them together rather than back-to-back.
-  const [candidates, recentPosts] = await Promise.all([
+  // The news fetch and the "what have we already reviewed" lookup are
+  // independent, so run them together rather than back-to-back.
+  //
+  // "Already reviewed" = we've previously built a Draft for this article. The
+  // Draft table is the canonical record here: it stores the real source URL +
+  // headline (Post.externalUrl is the published-post link, NOT the article URL,
+  // so it never matched a candidate). Deduping on Draft covers every story we've
+  // turned into content — PENDING, SKIPPED, and PUBLISHED alike — so we don't
+  // surface the same news twice.
+  const [candidates, seenDrafts] = await Promise.all([
     fetchCandidateNews(topics),
     unwrap(
       supabaseAdmin
-        .from("Post")
-        .select("externalUrl, content")
+        .from("Draft")
+        .select("sourceUrl, sourceTitle")
         .eq("projectId", projectId)
-        .order("publishedAt", { ascending: false })
-        .limit(200),
+        .order("createdAt", { ascending: false })
+        .limit(400),
     ),
   ]);
   if (candidates.length === 0) return null;
 
   const usedUrls = new Set(
-    recentPosts.map((p) => p.externalUrl).filter((u): u is string => !!u),
+    seenDrafts.map((d) => d.sourceUrl).filter((u): u is string => !!u),
   );
-  const recentTitles = recentPosts
-    .map((p) => p.content.split("\n")[0]?.trim().toLowerCase())
-    .filter((t): t is string => !!t);
+  const seenTitles = new Set(
+    seenDrafts
+      .map((d) => d.sourceTitle?.trim().toLowerCase())
+      .filter((t): t is string => !!t),
+  );
 
   const fresh = candidates.filter((item) => {
     if (usedUrls.has(item.url)) return false;
-    const titleLc = item.title.toLowerCase();
-    return !recentTitles.some((t) => t === titleLc);
+    return !seenTitles.has(item.title.trim().toLowerCase());
   });
 
-  const pool = (fresh.length > 0 ? fresh : candidates).slice(0, SCORE_POOL);
+  // Every candidate has already been drafted — nothing new to say. Skip this run
+  // instead of re-posting a story we've covered; the next tick tries again once
+  // fresh news appears. (This used to fall back to the full pool, which could
+  // re-draft a duplicate.)
+  if (fresh.length === 0) return null;
+
+  const pool = fresh.slice(0, SCORE_POOL);
   if (pool.length === 0) return null;
 
   const ranked = await rankByRelevance(pool, topics, opts);

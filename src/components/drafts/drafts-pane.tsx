@@ -16,11 +16,13 @@ import {
   ShieldAlert,
   ShieldCheck,
   ShieldQuestion,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import {
   approveDraftAction,
+  regenerateDraftAction,
   retryDraftAction,
   skipDraftAction,
   updateDraftContentAction,
@@ -230,6 +232,20 @@ export function DraftsPane({
     });
   }
 
+  function regenerate() {
+    if (!active) return;
+    startTransition(async () => {
+      const res = await regenerateDraftAction(active.id);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success("Regenerated.");
+      setEditing(false);
+      router.refresh();
+    });
+  }
+
   function retry() {
     if (!active) return;
     startTransition(async () => {
@@ -402,6 +418,18 @@ export function DraftsPane({
                       >
                         <RefreshCw size={11} />
                         <span>Retry</span>
+                      </button>
+                    )}
+                    {!editing && active.status !== "PUBLISHED" && (
+                      <button
+                        type="button"
+                        className="btn xs ghost"
+                        onClick={regenerate}
+                        disabled={pending}
+                        title="Rewrite the copy from the same source story"
+                      >
+                        <Sparkles size={11} />
+                        <span>Regenerate</span>
                       </button>
                     )}
                     {!editing && active.status !== "PUBLISHED" && (

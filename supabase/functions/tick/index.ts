@@ -24,6 +24,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import {
   publishDueScheduledDrafts,
+  regenerateDraft,
   runPipelineForAllDue,
   runPipelineForProject,
 } from "./lib/pipeline.ts";
@@ -61,11 +62,13 @@ function json(body: unknown, status = 200): Response {
 }
 
 type Body = {
-  action?: "tick" | "generate" | "compose" | "list-models" | "moderate";
+  action?: "tick" | "generate" | "regenerate" | "compose" | "list-models" | "moderate";
   projectId?: string;
   input?: AdHocInput;
   /** Manual topic override for the "generate" action (empty → all topics). */
   topics?: string[];
+  /** Target draft for the "regenerate" action. */
+  draftId?: string;
 } & Partial<ModerationInput>;
 
 // The scheduled fan-out: run all due projects + flush due scheduled drafts.
@@ -109,6 +112,14 @@ Deno.serve(async (req: Request) => {
       case "generate": {
         if (!body.projectId) return json({ ok: false, error: "projectId required" }, 400);
         const res = await runPipelineForProject(body.projectId, body.topics);
+        return json(res);
+      }
+
+      case "regenerate": {
+        if (!body.projectId || !body.draftId) {
+          return json({ ok: false, error: "projectId and draftId required" }, 400);
+        }
+        const res = await regenerateDraft(body.projectId, body.draftId);
         return json(res);
       }
 

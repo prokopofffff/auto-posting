@@ -100,6 +100,7 @@ export type SettingsInitial = {
   writingStyle: WritingStyle;
   customStyle: string;
   intervalDays: number;
+  postsPerDay: number;
   preferredHour: number;
   timezone: string;
   mode: Mode;
@@ -143,6 +144,7 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
   const [writingStyle, setWritingStyle] = useState<WritingStyle>(initial.writingStyle);
   const [customStyle, setCustomStyle] = useState(initial.customStyle);
   const [intervalDays, setIntervalDays] = useState(initial.intervalDays);
+  const [postsPerDay, setPostsPerDay] = useState(initial.postsPerDay);
   const [preferredHour, setPreferredHour] = useState(initial.preferredHour);
   const [timezone, setTimezone] = useState(initial.timezone);
   const [mode, setMode] = useState<Mode>(initial.mode);
@@ -227,6 +229,7 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
         writingStyle,
         customStyle,
         intervalDays,
+        postsPerDay,
         preferredHour,
         timezone,
         mode,
@@ -265,6 +268,7 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
     setWritingStyle(initial.writingStyle);
     setCustomStyle(initial.customStyle);
     setIntervalDays(initial.intervalDays);
+    setPostsPerDay(initial.postsPerDay);
     setPreferredHour(initial.preferredHour);
     setTimezone(initial.timezone);
     setMode(initial.mode);
@@ -968,6 +972,24 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="field">
+              <div className="field-label">posts per day</div>
+              <input
+                className="input mono"
+                type="number"
+                min={1}
+                max={24}
+                value={postsPerDay}
+                onChange={(e) =>
+                  setPostsPerDay(
+                    Math.min(24, Math.max(1, Number(e.target.value) || 1)),
+                  )
+                }
+              />
+              <div className="field-help mono" style={{ fontSize: 11 }}>
+                evenly spaced across the day
+              </div>
             </div>
             <div className="field">
               <div className="field-label">hour (0–23)</div>
