@@ -23,6 +23,24 @@ export async function runPipelineForProject(
   }
 }
 
+export type RegenerateResult =
+  | { ok: true; draftId: string }
+  | { ok: false; error: string };
+
+// Rewrite an existing draft's copy against the same source story (the edge
+// function reuses the article fields persisted on the draft). Callers must
+// verify ownership first (see regenerateDraftAction).
+export async function regenerateDraft(
+  projectId: string,
+  draftId: string,
+): Promise<RegenerateResult> {
+  try {
+    return await invokeEdge<RegenerateResult>("regenerate", { projectId, draftId });
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 // The scheduled fan-out (all due projects + flush scheduled drafts) runs
 // entirely inside the edge function's default "tick" action. Exposed here for
 // the manual /api/cron/tick fallback route.

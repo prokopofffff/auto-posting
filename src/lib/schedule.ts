@@ -6,6 +6,7 @@ export type ScheduleInfo = {
   nextAt: Date;
   dueNow: boolean;
   intervalDays: number;
+  postsPerDay: number;
   preferredHour: number;
   timezone: string;
 };
@@ -45,6 +46,26 @@ function dayIndexOf(d: Date): number {
   return js === 0 ? 6 : js - 1;
 }
 
+// Local (project-timezone) weekday for an instant, Mon=0..Sun=6.
+function localDayIndex(at: Date, timezone: string): number {
+  const offsetMin = parseTzOffsetMinutes(timezone, at);
+  return dayIndexOf(new Date(at.getTime() + offsetMin * 60_000));
+}
+
+// Push an instant forward whole days until it lands on a non-skipped weekday.
+// Used for the intra-day gap slots, where we don't re-anchor to preferredHour.
+function avoidSkipDays(at: Date, timezone: string, skipDays: number[]): Date {
+  if (skipDays.length === 0) return at;
+  const skip = new Set(skipDays);
+  let cur = at;
+  let guard = 0;
+  while (guard < 14 && skip.has(localDayIndex(cur, timezone))) {
+    cur = new Date(cur.getTime() + 86_400_000);
+    guard += 1;
+  }
+  return cur;
+}
+
 function nextRunForHour(
   baseline: Date,
   intervalDays: number,
@@ -71,40 +92,49 @@ function nextRunForHour(
 }
 
 export async function computeScheduleInfo(projectId: string): Promise<ScheduleInfo | null> {
-  const { data: project } = await selectProjectWithRelations(
-    supabaseAdmin,
-    projectId,
-  );
+  // The project graph and the "last generation" lookup only need projectId, so
+  // fetch them together — this runs once per active project on every tick.
+  const [{ data: project }, { data: lastDraft }] = await Promise.all([
+    selectProjectWithRelations(supabaseAdmin, projectId),
+    // Throttle off the last GENERATED draft, not the last published post. A
+    // scheduled run always produces a Draft but only publishes a Post in
+    // AUTOPILOT (or HYBRID above threshold, with a verified article) — so keying
+    // off Post made MANUAL/HYBRID projects look perpetually "due" and generate a
+    // fresh draft on every hourly tick instead of once per slot.
+    supabaseAdmin
+      .from("Draft")
+      .select("createdAt")
+      .eq("projectId", projectId)
+      .order("createdAt", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
   if (!project?.settings) return null;
 
-  const { data: lastPost } = await supabaseAdmin
-    .from("Post")
-    .select("publishedAt")
-    .eq("projectId", projectId)
-    .is("error", null)
-    .order("publishedAt", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
   const { intervalDays, preferredHour, timezone, skipDays } = project.settings;
-  // publishedAt is an ISO string from supabase-js; parse to a Date for the math.
-  const lastAt = lastPost?.publishedAt ? new Date(lastPost.publishedAt) : null;
-  const baseline = lastAt
-    ? new Date(lastAt.getTime() + intervalDays * 86_400_000 - 86_400_000)
-    : new Date();
+  // Guard the divisor against a stray non-positive value (no DB CHECK enforces
+  // it); the column is NOT NULL DEFAULT 1 and zod-validated min 1 otherwise.
+  const postsPerDay = Math.max(1, project.settings.postsPerDay);
+  const skip = skipDays ?? [];
+  // createdAt is an ISO string from supabase-js; parse to a Date for the math.
+  const lastAt = lastDraft?.createdAt ? new Date(lastDraft.createdAt) : null;
 
-  const nextAt = nextRunForHour(
-    baseline,
-    intervalDays,
-    preferredHour,
-    timezone,
-    skipDays ?? [],
-  );
+  // Spacing between two generations. postsPerDay subdivides each interval day
+  // into evenly-spaced slots: 1×/day → 24h, 3×/day → 8h, weekly → 168h.
+  const gapMs = Math.round((intervalDays * 86_400_000) / postsPerDay);
+
+  // First run anchors to the next preferredHour slot; afterwards we space by the
+  // per-slot gap from the last generation, stepping over skipped weekdays.
+  const nextAt = lastAt
+    ? avoidSkipDays(new Date(lastAt.getTime() + gapMs), timezone, skip)
+    : nextRunForHour(new Date(), intervalDays, preferredHour, timezone, skip);
+
   return {
     lastAt,
     nextAt,
     dueNow: project.status === "ACTIVE" && nextAt.getTime() <= Date.now(),
     intervalDays,
+    postsPerDay,
     preferredHour,
     timezone,
   };

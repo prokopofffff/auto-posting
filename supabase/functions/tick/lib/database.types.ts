@@ -141,6 +141,7 @@ export type Database = {
           imageUrl: string | null;
           projectId: string;
           scheduledAt: string | null;
+          sourceExcerpt: string | null;
           sourceTitle: string | null;
           sourceTrust: number | null;
           sourceUrl: string | null;
@@ -164,6 +165,7 @@ export type Database = {
           imageUrl?: string | null;
           projectId: string;
           scheduledAt?: string | null;
+          sourceExcerpt?: string | null;
           sourceTitle?: string | null;
           sourceTrust?: number | null;
           sourceUrl?: string | null;
@@ -187,6 +189,7 @@ export type Database = {
           imageUrl?: string | null;
           projectId?: string;
           scheduledAt?: string | null;
+          sourceExcerpt?: string | null;
           sourceTitle?: string | null;
           sourceTrust?: number | null;
           sourceUrl?: string | null;
@@ -389,6 +392,7 @@ export type Database = {
           maxPostChars: number;
           mode: Database["public"]["Enums"]["PostMode"];
           moderationEnabled: boolean;
+          postsPerDay: number;
           preferredHour: number;
           projectId: string;
           scheduleCron: string | null;
@@ -413,6 +417,7 @@ export type Database = {
           maxPostChars?: number;
           mode?: Database["public"]["Enums"]["PostMode"];
           moderationEnabled?: boolean;
+          postsPerDay?: number;
           preferredHour?: number;
           projectId: string;
           scheduleCron?: string | null;
@@ -437,6 +442,7 @@ export type Database = {
           maxPostChars?: number;
           mode?: Database["public"]["Enums"]["PostMode"];
           moderationEnabled?: boolean;
+          postsPerDay?: number;
           preferredHour?: number;
           projectId?: string;
           scheduleCron?: string | null;

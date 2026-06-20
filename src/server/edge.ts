@@ -14,7 +14,13 @@ function functionsBase(): string {
   return `${url.replace(/\/$/, "")}/functions/v1`;
 }
 
-export type EdgeAction = "tick" | "generate" | "compose" | "list-models" | "moderate";
+export type EdgeAction =
+  | "tick"
+  | "generate"
+  | "regenerate"
+  | "compose"
+  | "list-models"
+  | "moderate";
 
 /**
  * Calls the edge function and returns its JSON body verbatim as `T`. Every edge

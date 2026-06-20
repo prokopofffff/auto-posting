@@ -412,6 +412,9 @@ export default async function DashboardPage() {
                 </div>
                 <div className="mono muted-2" style={{ fontSize: 11, marginTop: 2 }}>
                   every {settings?.intervalDays ?? 1}d
+                  {(settings?.postsPerDay ?? 1) > 1
+                    ? ` · ${settings?.postsPerDay}/day`
+                    : ""}
                 </div>
               </div>
             </div>
