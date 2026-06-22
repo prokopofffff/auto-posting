@@ -9,7 +9,7 @@
 import { supabaseAdmin, unwrap } from "./supabase.ts";
 import { GLOBAL_FALLBACK_FEEDS, TOPIC_FEEDS } from "./news-feeds.ts";
 import { fetchNewsApi, isNewsApiConfigured } from "./newsapi.ts";
-import { buildFactCheck, keywords } from "./fact-check.ts";
+import { buildFactCheck, keywords, keywordSetOf, sameStorySets } from "./fact-check.ts";
 import { domainOf, isHighTrust } from "./source-trust.ts";
 import { scoreCandidates } from "./claude.ts";
 import type { ResolvedModel } from "./ai-credentials.ts";
@@ -425,15 +425,26 @@ export async function pickFreshArticle(
   const usedUrls = new Set(
     seenDrafts.map((d) => d.sourceUrl).filter((u): u is string => !!u),
   );
-  const seenTitles = new Set(
-    seenDrafts
-      .map((d) => d.sourceTitle?.trim().toLowerCase())
-      .filter((t): t is string => !!t),
-  );
+  const seenTitleList = seenDrafts
+    .map((d) => d.sourceTitle?.trim())
+    .filter((t): t is string => !!t);
+  const seenTitles = new Set(seenTitleList.map((t) => t.toLowerCase()));
+  // Precompute keyword sets for every reviewed headline so the near-duplicate
+  // check below tokenizes each seen title once, not once per candidate.
+  const seenKeywordSets = seenTitleList.map(keywordSetOf);
 
   const fresh = candidates.filter((item) => {
     if (usedUrls.has(item.url)) return false;
-    return !seenTitles.has(item.title.trim().toLowerCase());
+    // Exact-title guard (cheap) first…
+    if (seenTitles.has(item.title.trim().toLowerCase())) return false;
+    // …then a fuzzy guard: a story is "the same" as one we've already reviewed
+    // (PENDING/SKIPPED/PUBLISHED) when their headlines share enough significant
+    // keywords. This stops a near-identical retelling — a different publisher,
+    // different URL, slightly reworded headline — from coming back after you've
+    // skipped it. Same keyword-overlap test the corroboration step uses.
+    const itemKeywords = keywordSetOf(item.title);
+    if (seenKeywordSets.some((s) => sameStorySets(itemKeywords, s))) return false;
+    return true;
   });
 
   // Every candidate has already been drafted — nothing new to say. Skip this run
