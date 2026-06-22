@@ -73,6 +73,19 @@ export function describesSameStory(a: string, b: string): boolean {
 }
 
 /**
+ * Set-based variants of the above, for callers comparing one headline against
+ * many already-seen ones: tokenize each seen title once with `keywordSetOf`,
+ * then test with `sameStorySets` to avoid re-parsing in the hot loop.
+ */
+export function keywordSetOf(title: string): Set<string> {
+  return keywordSet(title);
+}
+
+export function sameStorySets(a: Set<string>, b: Set<string>): boolean {
+  return sameStory(a, b);
+}
+
+/**
  * From a pool of candidate articles returned by a search, find the distinct
  * publisher domains (other than the origin) that report the same story.
  */
