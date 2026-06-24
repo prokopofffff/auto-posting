@@ -10,7 +10,7 @@ import {
 import { generatePost, type GeneratedItem, type GenerateInput, type VoiceCfg } from "./claude.ts";
 import { resolveModel } from "./ai-credentials.ts";
 import { pickFreshArticle } from "./news.ts";
-import { searchPhoto } from "./pexels.ts";
+import { generateImage } from "./image-gen.ts";
 import { publishDraft } from "./publish.ts";
 import { computeScheduleInfo } from "./schedule.ts";
 import { domainOf } from "./source-trust.ts";
@@ -67,21 +67,6 @@ function resolveTargets(project: ProjectWithRelations): Platform[] {
   )
     targets.push("LINKEDIN");
   return targets;
-}
-
-// Newest-first photo URLs a project has already used, so a fresh pick can skip
-// them and not repeat an image. Best-effort: returns [] on any read failure.
-async function recentProjectImages(projectId: string, limit = 40): Promise<string[]> {
-  const { data } = await supabaseAdmin
-    .from("Draft")
-    .select("imageUrl")
-    .eq("projectId", projectId)
-    .not("imageUrl", "is", null)
-    .order("createdAt", { ascending: false })
-    .limit(limit);
-  return (data ?? [])
-    .map((d) => d.imageUrl)
-    .filter((u): u is string => !!u);
 }
 
 // Fold the model's per-post output into the Draft storage shape:
@@ -190,25 +175,19 @@ export async function runPipelineForProject(
   }
 
   const isPerPlatform = settings.voiceMode === "PER_PLATFORM";
-  // Run generation and the recent-photos read concurrently. The photo SEARCH
-  // waits for generation because the model builds the search query from the post
-  // it writes (far more on-subject than the bare topic) — but the recent-images
-  // read it needs to dedup against doesn't, so overlap that DB round-trip.
-  const [result, recentImages] = await Promise.all([
-    generatePost(
-      buildGenerateInput(settings, { article, topics, targets, factCheck: article.factCheck }),
-      resolved,
-    ),
-    recentProjectImages(project.id),
-  ]);
+  const result = await generatePost(
+    buildGenerateInput(settings, { article, topics, targets, factCheck: article.factCheck }),
+    resolved,
+  );
 
   if (result.posts.length === 0) return { ok: false, error: "Model returned no posts." };
 
-  // Best-effort stock photo, keyed on the model's image query (falling back to
-  // the matched topic), skipping recently-used images so it doesn't repeat. null
-  // when no PEXELS_API_KEY or no match, leaving the draft text-only.
+  // Best-effort AI-generated image, built from the model's visual prompt for the
+  // post (falling back to the matched topic). Each generation is unique, so no
+  // dedup is needed; we warm it now so an auto-published post ships a ready
+  // image. null when IMAGE_GEN=off or no prompt, leaving the draft text-only.
   const imageQuery = result.imageQuery || article.matchedTopic || topics[0] || "";
-  const imageUrl = await searchPhoto(imageQuery, recentImages);
+  const imageUrl = await generateImage(imageQuery, { warm: true });
 
   // Build storage shape
   const { contentByLang, contentByPlatform } = buildContentShape(result.posts, isPerPlatform);
@@ -236,8 +215,8 @@ export async function runPipelineForProject(
         // the same story faithfully, not from the headline alone.
         sourceExcerpt: article.summary || null,
         imageUrl,
-        // Persist the model's image query so "re-pick photo" can search with the
-        // same smart query the auto-pick used, not just the topic.
+        // Persist the model's image prompt so "regenerate image" can build from
+        // the same on-subject prompt the auto-pick used, not just the topic.
         imageQuery: result.imageQuery,
         contentByLang,
         // JSON columns take plain objects/null directly.
@@ -381,32 +360,31 @@ export type PickPhotoResult =
   | { ok: true; url: string | null }
   | { ok: false; error: string };
 
-// Re-pick a stock photo for an existing draft, keyed on its topic and skipping
-// the project's recently-used images (plus the draft's current photo and any
-// extra `exclude` — e.g. a not-yet-saved pick the editor is showing) so the
-// result is a *different* image. Returns the URL only; persisting it is the
-// caller's job, so the editor can stage it and save on the user's confirmation.
-// url is null when PEXELS_API_KEY is unset or no match was found.
+// Re-generate the image for an existing draft, built from the model's visual
+// prompt (or the topic, for older/manually-composed drafts). A fresh random
+// seed makes the result a *different* image every time, so `_exclude` (the
+// editor's staged/current pick) is no longer needed. Returns the URL only;
+// persisting it is the caller's job, so the editor can stage it and save on the
+// user's confirmation. url is null when IMAGE_GEN=off or there's no prompt.
 export async function pickDraftPhoto(
   projectId: string,
   draftId: string,
-  exclude: string[] = [],
+  _exclude: string[] = [],
 ): Promise<PickPhotoResult> {
   const { data: draft } = await supabaseAdmin
     .from("Draft")
-    .select("topic, topics, imageUrl, imageQuery")
+    .select("topic, topics, imageQuery")
     .eq("id", draftId)
     .eq("projectId", projectId)
     .maybeSingle();
   if (!draft) return { ok: false, error: "Draft not found." };
-  // Prefer the model's image query (set at generation) for a more on-subject
-  // photo; fall back to the topic for older/manually-composed drafts.
+  // Prefer the model's image prompt (set at generation) for an on-subject
+  // image; fall back to the topic for older/manually-composed drafts.
   const query = draft.imageQuery || draft.topic || draft.topics?.[0] || "";
-  if (!query) return { ok: false, error: "Draft has no topic to search on." };
+  if (!query) return { ok: false, error: "Draft has no topic to generate from." };
 
-  const recent = await recentProjectImages(projectId);
-  const skip = [...recent, ...(draft.imageUrl ? [draft.imageUrl] : []), ...exclude];
-  const url = await searchPhoto(query, skip);
+  // No warm: the editor preview <img> renders the URL and warms the CDN cache.
+  const url = await generateImage(query);
   return { ok: true, url };
 }
 

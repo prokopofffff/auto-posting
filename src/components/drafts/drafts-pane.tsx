@@ -223,8 +223,8 @@ export function DraftsPane({
       .finally(() => setUploadingImage(false));
   }
 
-  // Auto-pick a fresh Pexels photo for the draft's topic and stage it (saved on
-  // Save, like an upload). Passes the staged image so a re-pick always changes it.
+  // Generate a fresh AI image for the draft's topic and stage it (saved on Save,
+  // like an upload). A new random seed makes each regeneration a different image.
   function repickPhoto() {
     if (!active || pickingPhoto) return;
     setPickingPhoto(true);
@@ -235,7 +235,7 @@ export function DraftsPane({
           return;
         }
         if (!res.url) {
-          toast.error("No new photo found for this topic.");
+          toast.error("Couldn't generate an image for this topic.");
           return;
         }
         setEditImageUrl(res.url);
@@ -619,10 +619,10 @@ export function DraftsPane({
                       className="btn xs ghost"
                       onClick={repickPhoto}
                       disabled={uploadingImage || pickingPhoto}
-                      title="Find a fresh stock photo from Pexels for this topic"
+                      title="Generate a fresh AI image for this topic"
                     >
                       <Images size={11} />
-                      <span>{pickingPhoto ? "Finding…" : "New stock photo"}</span>
+                      <span>{pickingPhoto ? "Generating…" : "Generate image"}</span>
                     </button>
                     {editImageUrl && (
                       <button
