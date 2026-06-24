@@ -69,6 +69,21 @@ function resolveTargets(project: ProjectWithRelations): Platform[] {
   return targets;
 }
 
+// Newest-first photo URLs a project has already used, so a fresh pick can skip
+// them and not repeat an image. Best-effort: returns [] on any read failure.
+async function recentProjectImages(projectId: string, limit = 40): Promise<string[]> {
+  const { data } = await supabaseAdmin
+    .from("Draft")
+    .select("imageUrl")
+    .eq("projectId", projectId)
+    .not("imageUrl", "is", null)
+    .order("createdAt", { ascending: false })
+    .limit(limit);
+  return (data ?? [])
+    .map((d) => d.imageUrl)
+    .filter((u): u is string => !!u);
+}
+
 // Fold the model's per-post output into the Draft storage shape:
 //   contentByLang     — { lang: text } (always set; used by single-voice publish)
 //   contentByPlatform — { platform: { lang: text } } (per-platform mode only)
@@ -174,23 +189,26 @@ export async function runPipelineForProject(
     };
   }
 
-  // Kick off the (best-effort) stock-photo search now so its network latency
-  // overlaps the generation call below. searchPhoto never rejects (returns null
-  // on any failure), so the in-flight promise is safe to await later. Keyed on
-  // the matched topic so the image stays on-subject.
-  const imageP = searchPhoto(article.matchedTopic ?? topics[0] ?? "");
-
   const isPerPlatform = settings.voiceMode === "PER_PLATFORM";
-  const result = await generatePost(
-    buildGenerateInput(settings, { article, topics, targets, factCheck: article.factCheck }),
-    resolved,
-  );
+  // Run generation and the recent-photos read concurrently. The photo SEARCH
+  // waits for generation because the model builds the search query from the post
+  // it writes (far more on-subject than the bare topic) — but the recent-images
+  // read it needs to dedup against doesn't, so overlap that DB round-trip.
+  const [result, recentImages] = await Promise.all([
+    generatePost(
+      buildGenerateInput(settings, { article, topics, targets, factCheck: article.factCheck }),
+      resolved,
+    ),
+    recentProjectImages(project.id),
+  ]);
 
   if (result.posts.length === 0) return { ok: false, error: "Model returned no posts." };
 
-  // Resolve the photo started before generation (null when no PEXELS_API_KEY or
-  // no match, leaving the draft text-only).
-  const imageUrl = await imageP;
+  // Best-effort stock photo, keyed on the model's image query (falling back to
+  // the matched topic), skipping recently-used images so it doesn't repeat. null
+  // when no PEXELS_API_KEY or no match, leaving the draft text-only.
+  const imageQuery = result.imageQuery || article.matchedTopic || topics[0] || "";
+  const imageUrl = await searchPhoto(imageQuery, recentImages);
 
   // Build storage shape
   const { contentByLang, contentByPlatform } = buildContentShape(result.posts, isPerPlatform);
@@ -218,6 +236,9 @@ export async function runPipelineForProject(
         // the same story faithfully, not from the headline alone.
         sourceExcerpt: article.summary || null,
         imageUrl,
+        // Persist the model's image query so "re-pick photo" can search with the
+        // same smart query the auto-pick used, not just the topic.
+        imageQuery: result.imageQuery,
         contentByLang,
         // JSON columns take plain objects/null directly.
         contentByPlatform,
@@ -342,6 +363,10 @@ export async function regenerateDraft(
         tokensInput: result.tokensInput,
         tokensOutput: result.tokensOutput,
         costUsd: result.costUsd,
+        // Refresh the image query to track the rewritten copy so a later
+        // re-pick stays on-subject. Only when the model returned one — don't
+        // wipe a good query if it omitted it. The image itself is left as-is.
+        ...(result.imageQuery ? { imageQuery: result.imageQuery } : {}),
         // Back to review: a regenerated draft shouldn't keep an APPROVED/SKIPPED
         // status that no longer reflects the new copy.
         status: "PENDING",
@@ -350,6 +375,39 @@ export async function regenerateDraft(
   );
 
   return { ok: true, draftId };
+}
+
+export type PickPhotoResult =
+  | { ok: true; url: string | null }
+  | { ok: false; error: string };
+
+// Re-pick a stock photo for an existing draft, keyed on its topic and skipping
+// the project's recently-used images (plus the draft's current photo and any
+// extra `exclude` — e.g. a not-yet-saved pick the editor is showing) so the
+// result is a *different* image. Returns the URL only; persisting it is the
+// caller's job, so the editor can stage it and save on the user's confirmation.
+// url is null when PEXELS_API_KEY is unset or no match was found.
+export async function pickDraftPhoto(
+  projectId: string,
+  draftId: string,
+  exclude: string[] = [],
+): Promise<PickPhotoResult> {
+  const { data: draft } = await supabaseAdmin
+    .from("Draft")
+    .select("topic, topics, imageUrl, imageQuery")
+    .eq("id", draftId)
+    .eq("projectId", projectId)
+    .maybeSingle();
+  if (!draft) return { ok: false, error: "Draft not found." };
+  // Prefer the model's image query (set at generation) for a more on-subject
+  // photo; fall back to the topic for older/manually-composed drafts.
+  const query = draft.imageQuery || draft.topic || draft.topics?.[0] || "";
+  if (!query) return { ok: false, error: "Draft has no topic to search on." };
+
+  const recent = await recentProjectImages(projectId);
+  const skip = [...recent, ...(draft.imageUrl ? [draft.imageUrl] : []), ...exclude];
+  const url = await searchPhoto(query, skip);
+  return { ok: true, url };
 }
 
 export async function publishDueScheduledDrafts(): Promise<{

@@ -6,6 +6,8 @@ import { unwrap } from "@/lib/supabase/queries";
 import { getCurrentUser, userOwnsProject } from "@/server/project";
 import { publishDraft } from "@/server/publish";
 import { regenerateDraft, runPipelineForProject } from "@/server/pipeline";
+import { invokeEdge } from "@/server/edge";
+import { uploadProjectImage } from "@/lib/upload-image";
 import type { Platform } from "@/lib/types";
 
 async function assertDraftOwnership(draftId: string) {
@@ -57,6 +59,55 @@ export async function updateDraftContentAction(
   );
   revalidatePath("/drafts");
   return { ok: true as const };
+}
+
+/** Set or clear the photo attached to a draft. `imageUrl` null removes it. */
+export async function updateDraftImageAction(
+  draftId: string,
+  imageUrl: string | null,
+) {
+  const owned = await assertDraftOwnership(draftId);
+  if (!owned.ok) return owned;
+  await unwrap(
+    supabaseAdmin.from("Draft").update({ imageUrl }).eq("id", draftId),
+  );
+  revalidatePath("/drafts");
+  return { ok: true as const };
+}
+
+/**
+ * Upload a replacement photo for a draft and return its public URL (does not
+ * attach it — the editor persists the choice via updateDraftImageAction on save).
+ * Ownership is resolved from the draft's project.
+ */
+export async function uploadDraftImageAction(formData: FormData) {
+  const draftId = String(formData.get("draftId") ?? "");
+  if (!draftId) return { ok: false as const, error: "Missing draft." };
+  const owned = await assertDraftOwnership(draftId);
+  if (!owned.ok) return owned;
+  return uploadProjectImage(owned.draft.projectId, formData.get("file"));
+}
+
+/**
+ * Auto-pick a fresh Pexels photo for a draft, keyed on its topic and skipping
+ * recently-used images (and `currentImageUrl`, the photo currently staged in the
+ * editor) so the result differs. Returns the URL without persisting it — the
+ * editor stages it and saves on confirmation. url is null if none was found
+ * (no PEXELS_API_KEY or no match).
+ */
+export async function repickDraftImageAction(
+  draftId: string,
+  currentImageUrl?: string | null,
+) {
+  const owned = await assertDraftOwnership(draftId);
+  if (!owned.ok) return owned;
+  return invokeEdge<
+    { ok: true; url: string | null } | { ok: false; error: string }
+  >("pick-photo", {
+    projectId: owned.draft.projectId,
+    draftId,
+    exclude: currentImageUrl ? [currentImageUrl] : [],
+  });
 }
 
 export async function regenerateDraftAction(draftId: string) {

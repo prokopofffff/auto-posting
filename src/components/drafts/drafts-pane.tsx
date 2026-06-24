@@ -11,6 +11,8 @@ import {
   Edit,
   ExternalLink,
   Image as ImageIcon,
+  ImagePlus,
+  Images,
   RefreshCw,
   Send,
   ShieldAlert,
@@ -23,9 +25,12 @@ import {
 import {
   approveDraftAction,
   regenerateDraftAction,
+  repickDraftImageAction,
   retryDraftAction,
   skipDraftAction,
   updateDraftContentAction,
+  updateDraftImageAction,
+  uploadDraftImageAction,
 } from "@/server/draft-actions";
 import { fmtDateTime, fmtTimeOnly } from "@/lib/format";
 import { PlatformIcon } from "@/components/platform-icon";
@@ -150,6 +155,11 @@ export function DraftsPane({
   const [editing, setEditing] = useState(false);
   const [editBuffer, setEditBuffer] = useState<Record<string, string>>({});
   const [editLang, setEditLang] = useState<string | null>(null);
+  // Photo being edited (null = no photo). Mirrors active.imageUrl on edit start;
+  // persisted on save only, so a cancelled edit leaves the draft untouched.
+  const [editImageUrl, setEditImageUrl] = useState<string | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [pickingPhoto, setPickingPhoto] = useState(false);
 
   const active = useMemo(
     () => drafts.find((d) => d.id === activeId) ?? drafts[0] ?? null,
@@ -176,12 +186,62 @@ export function DraftsPane({
     if (!active) return;
     setEditBuffer({ ...active.contentByLang });
     setEditLang(Object.keys(active.contentByLang)[0] ?? null);
+    setEditImageUrl(active.imageUrl);
     setEditing(true);
   }
 
   function cancelEdit() {
     setEditing(false);
     setEditBuffer({});
+    setEditImageUrl(null);
+  }
+
+  // Persist a pending photo change for `active`, if any. Returns false (and
+  // toasts) on failure so callers can abort. No-op when the photo is unchanged.
+  async function persistImage(): Promise<boolean> {
+    if (!active || editImageUrl === active.imageUrl) return true;
+    const res = await updateDraftImageAction(active.id, editImageUrl);
+    if (!res.ok) {
+      toast.error(res.error);
+      return false;
+    }
+    return true;
+  }
+
+  function onPickImage(file: File | undefined) {
+    if (!file || !active) return;
+    setUploadingImage(true);
+    const fd = new FormData();
+    fd.set("draftId", active.id);
+    fd.set("file", file);
+    uploadDraftImageAction(fd)
+      .then((res) => {
+        if (!res.ok) toast.error(res.error);
+        else setEditImageUrl(res.url);
+      })
+      .catch((e) => toast.error((e as Error).message))
+      .finally(() => setUploadingImage(false));
+  }
+
+  // Auto-pick a fresh Pexels photo for the draft's topic and stage it (saved on
+  // Save, like an upload). Passes the staged image so a re-pick always changes it.
+  function repickPhoto() {
+    if (!active || pickingPhoto) return;
+    setPickingPhoto(true);
+    repickDraftImageAction(active.id, editImageUrl)
+      .then((res) => {
+        if (!res.ok) {
+          toast.error(res.error);
+          return;
+        }
+        if (!res.url) {
+          toast.error("No new photo found for this topic.");
+          return;
+        }
+        setEditImageUrl(res.url);
+      })
+      .catch((e) => toast.error((e as Error).message))
+      .finally(() => setPickingPhoto(false));
   }
 
   function saveEdit() {
@@ -192,6 +252,7 @@ export function DraftsPane({
         toast.error(res.error);
         return;
       }
+      if (!(await persistImage())) return;
       toast.success("Draft updated.");
       setEditing(false);
       router.refresh();
@@ -207,6 +268,7 @@ export function DraftsPane({
           toast.error(upd.error);
           return;
         }
+        if (!(await persistImage())) return;
       }
       const res = await approveDraftAction(active.id);
       if (!res.ok) {
@@ -502,11 +564,11 @@ export function DraftsPane({
               </div>
 
               <div className="draft-detail-body scroll-area">
-                {active.imageUrl && (
-                  <div style={{ marginBottom: 14, maxWidth: 720 }}>
+                {(editing ? editImageUrl : active.imageUrl) && (
+                  <div style={{ marginBottom: editing ? 8 : 14, maxWidth: 720 }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={active.imageUrl}
+                      src={(editing ? editImageUrl : active.imageUrl) as string}
                       alt="post attachment"
                       style={{
                         width: "100%",
@@ -517,6 +579,62 @@ export function DraftsPane({
                         display: "block",
                       }}
                     />
+                  </div>
+                )}
+                {editing && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      marginBottom: 14,
+                      maxWidth: 720,
+                    }}
+                  >
+                    <label
+                      className="btn xs ghost"
+                      style={{ cursor: uploadingImage ? "wait" : "pointer" }}
+                    >
+                      <ImagePlus size={11} />
+                      <span>
+                        {uploadingImage
+                          ? "Uploading…"
+                          : editImageUrl
+                          ? "Replace photo"
+                          : "Add photo"}
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        style={{ display: "none" }}
+                        disabled={uploadingImage || pickingPhoto}
+                        onChange={(e) => {
+                          onPickImage(e.target.files?.[0]);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="btn xs ghost"
+                      onClick={repickPhoto}
+                      disabled={uploadingImage || pickingPhoto}
+                      title="Find a fresh stock photo from Pexels for this topic"
+                    >
+                      <Images size={11} />
+                      <span>{pickingPhoto ? "Finding…" : "New stock photo"}</span>
+                    </button>
+                    {editImageUrl && (
+                      <button
+                        type="button"
+                        className="btn xs ghost danger"
+                        onClick={() => setEditImageUrl(null)}
+                        disabled={uploadingImage || pickingPhoto}
+                      >
+                        <X size={11} />
+                        <span>Remove</span>
+                      </button>
+                    )}
                   </div>
                 )}
                 {editing ? (

@@ -10,6 +10,7 @@ import {
 import { getCurrentUser, userOwnsProject } from "@/server/project";
 import { publishDraft } from "@/server/publish";
 import { invokeEdge } from "@/server/edge";
+import { uploadProjectImage } from "@/lib/upload-image";
 import type { Platform } from "@/lib/types";
 
 const composeInputSchema = z.object({
@@ -122,44 +123,16 @@ export async function composeSubmitAction(input: ComposeActionInput) {
   return { ok: true as const, mode: data.mode, draftId: draft.id };
 }
 
-const UPLOAD_BUCKET = "post-images";
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8MB
-const ALLOWED_IMAGE_TYPES: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/webp": "webp",
-  "image/gif": "gif",
-};
-
 /**
  * Upload a photo for a compose draft to the public `post-images` bucket and
- * return its public URL. Goes through the service-role client (bypasses RLS);
- * ownership is verified by projectId, and the object is namespaced by project.
+ * return its public URL. Ownership is verified by projectId before uploading.
  */
 export async function uploadComposeImageAction(formData: FormData) {
   const projectId = String(formData.get("projectId") ?? "");
-  const file = formData.get("file");
   if (!projectId) return { ok: false as const, error: "Missing project." };
-  if (!(file instanceof File) || file.size === 0) {
-    return { ok: false as const, error: "No file provided." };
-  }
   const owned = await ownedProject(projectId);
   if (!owned.ok) return owned;
-
-  const ext = ALLOWED_IMAGE_TYPES[file.type];
-  if (!ext) return { ok: false as const, error: "Use a PNG, JPEG, WebP, or GIF image." };
-  if (file.size > MAX_IMAGE_BYTES) {
-    return { ok: false as const, error: "Image must be 8MB or smaller." };
-  }
-
-  const path = `${projectId}/${crypto.randomUUID()}.${ext}`;
-  const { error } = await supabaseAdmin.storage
-    .from(UPLOAD_BUCKET)
-    .upload(path, file, { contentType: file.type, upsert: false });
-  if (error) return { ok: false as const, error: `Upload failed: ${error.message}` };
-
-  const { data } = supabaseAdmin.storage.from(UPLOAD_BUCKET).getPublicUrl(path);
-  return { ok: true as const, url: data.publicUrl };
+  return uploadProjectImage(projectId, formData.get("file"));
 }
 
 const aiInputSchema = z.object({

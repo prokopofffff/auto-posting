@@ -96,6 +96,16 @@ export type GenerateInput = {
 /** Highest confidence we let an unverified story claim — forces human review. */
 const UNVERIFIED_CONFIDENCE_CEILING = 45;
 
+// The model writes the stock-photo search query itself, from the post it just
+// wrote — far more on-subject than the bare topic label. Shared by both voice
+// modes so the instruction reads identically.
+const IMAGE_QUERY_RULE =
+  'Also return a top-level "imageQuery": a 2-5 word English phrase naming a' +
+  " concrete, photographable subject for a stock-photo search (Pexels) that" +
+  " visually fits the post. Prefer tangible scenes or objects over" +
+  ' abstractions (e.g. "data center servers", "wind turbines at sunset" — not' +
+  ' "innovation" or "growth"). Plain words, no punctuation, no hashtags.';
+
 function verificationBlock(fc: FactCheck): string {
   if (fc.verdict === "TRUSTED") {
     return [
@@ -132,6 +142,8 @@ export type GenerationResult = {
   tokensOutput: number;
   costUsd: number;
   confidence: number;
+  /** Model-built stock-photo search query for this post, or null if absent. */
+  imageQuery: string | null;
 };
 
 function voiceBlock(v: VoiceCfg, header: string): string {
@@ -204,11 +216,12 @@ function buildSystemPrompt(input: Omit<GenerateInput, "article">): string {
       "",
       "## Output format",
       "Return STRICT JSON only, no prose:",
-      '{ "posts": [ { "language": "en", "content": "...", "confidence": 90 }, ... ], "confidence": 90 }',
+      '{ "posts": [ { "language": "en", "content": "...", "confidence": 90 }, ... ], "imageQuery": "data center servers", "confidence": 90 }',
       "",
       `Produce ONE post per language (${langLabels}). The same text is sent to all selected platforms.`,
       "",
       'Each post object MUST include a "confidence" integer 0-100 reflecting your confidence the post is ready to publish unchanged. Use 0-49 for "needs human review", 50-79 for "fine but iffy", 80-100 for "ship it".',
+      IMAGE_QUERY_RULE,
     );
   } else {
     const per = input.voice as Partial<Record<Platform, VoiceCfg>>;
@@ -222,11 +235,12 @@ function buildSystemPrompt(input: Omit<GenerateInput, "article">): string {
     lines.push(
       "## Output format",
       "Return STRICT JSON only, no prose:",
-      '{ "posts": [ { "platform": "LINKEDIN", "language": "en", "content": "...", "confidence": 90 }, ... ] }',
+      '{ "posts": [ { "platform": "LINKEDIN", "language": "en", "content": "...", "confidence": 90 }, ... ], "imageQuery": "data center servers" }',
       "",
       `Produce ONE post per (platform, language) combination. Platforms: ${input.targets.join(", ")}. Languages: ${langLabels}. Each variant must honor its platform's voice block above.`,
       "",
       'Each post object MUST include a "confidence" integer 0-100 reflecting your confidence the post is ready to publish unchanged.',
+      IMAGE_QUERY_RULE,
     );
   }
   return lines.join("\n");
@@ -276,6 +290,7 @@ export async function generatePost(
       confidence?: number;
     }>;
     confidence?: number;
+    imageQuery?: unknown;
   };
   if (!parsed.posts || !Array.isArray(parsed.posts)) {
     throw new Error("Model response missing 'posts' array.");
@@ -308,6 +323,14 @@ export async function generatePost(
     confidence = Math.min(confidence, UNVERIFIED_CONFIDENCE_CEILING);
   }
 
+  // Normalize the model's image query: trim, collapse whitespace, and cap the
+  // length so a stray sentence can't become a junk Pexels query. null when the
+  // model omitted it — the caller falls back to the topic.
+  const imageQuery =
+    typeof parsed.imageQuery === "string" && parsed.imageQuery.trim()
+      ? parsed.imageQuery.trim().replace(/\s+/g, " ").slice(0, 80)
+      : null;
+
   return {
     posts: cleaned.map((p) => ({
       platform: p.platform,
@@ -318,6 +341,7 @@ export async function generatePost(
     tokensOutput,
     costUsd: computeCostUsd(tokensInput, tokensOutput),
     confidence,
+    imageQuery,
   };
 }
 
