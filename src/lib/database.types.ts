@@ -157,6 +157,7 @@ export type Database = {
           createdAt: string
           factVerdict: Database["public"]["Enums"]["FactVerdict"] | null
           id: string
+          imageQuery: string | null
           imageUrl: string | null
           projectId: string
           scheduledAt: string | null
@@ -181,6 +182,7 @@ export type Database = {
           createdAt?: string
           factVerdict?: Database["public"]["Enums"]["FactVerdict"] | null
           id?: string
+          imageQuery?: string | null
           imageUrl?: string | null
           projectId: string
           scheduledAt?: string | null
@@ -205,6 +207,7 @@ export type Database = {
           createdAt?: string
           factVerdict?: Database["public"]["Enums"]["FactVerdict"] | null
           id?: string
+          imageQuery?: string | null
           imageUrl?: string | null
           projectId?: string
           scheduledAt?: string | null

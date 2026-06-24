@@ -23,6 +23,7 @@
 //     <project>.functions.supabase.co/tick with the Bearer CRON_SECRET header.
 // ─────────────────────────────────────────────────────────────────────────────
 import {
+  pickDraftPhoto,
   publishDueScheduledDrafts,
   regenerateDraft,
   runPipelineForAllDue,
@@ -62,13 +63,22 @@ function json(body: unknown, status = 200): Response {
 }
 
 type Body = {
-  action?: "tick" | "generate" | "regenerate" | "compose" | "list-models" | "moderate";
+  action?:
+    | "tick"
+    | "generate"
+    | "regenerate"
+    | "compose"
+    | "list-models"
+    | "moderate"
+    | "pick-photo";
   projectId?: string;
   input?: AdHocInput;
   /** Manual topic override for the "generate" action (empty → all topics). */
   topics?: string[];
-  /** Target draft for the "regenerate" action. */
+  /** Target draft for the "regenerate" / "pick-photo" actions. */
   draftId?: string;
+  /** Extra image URLs to skip for the "pick-photo" action (e.g. a staged pick). */
+  exclude?: string[];
 } & Partial<ModerationInput>;
 
 // The scheduled fan-out: run all due projects + flush due scheduled drafts.
@@ -130,6 +140,14 @@ Deno.serve(async (req: Request) => {
         const resolved = await resolveModel(body.projectId);
         const result = await generateAdHocPost(body.input, resolved);
         return json({ ok: true, ...result });
+      }
+
+      case "pick-photo": {
+        if (!body.projectId || !body.draftId) {
+          return json({ ok: false, error: "projectId and draftId required" }, 400);
+        }
+        const res = await pickDraftPhoto(body.projectId, body.draftId, body.exclude ?? []);
+        return json(res);
       }
 
       case "list-models": {

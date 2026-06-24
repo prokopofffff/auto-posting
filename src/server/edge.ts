@@ -20,7 +20,8 @@ export type EdgeAction =
   | "regenerate"
   | "compose"
   | "list-models"
-  | "moderate";
+  | "moderate"
+  | "pick-photo";
 
 /**
  * Calls the edge function and returns its JSON body verbatim as `T`. Every edge
