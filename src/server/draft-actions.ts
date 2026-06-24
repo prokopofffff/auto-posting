@@ -89,11 +89,10 @@ export async function uploadDraftImageAction(formData: FormData) {
 }
 
 /**
- * Auto-pick a fresh Pexels photo for a draft, keyed on its topic and skipping
- * recently-used images (and `currentImageUrl`, the photo currently staged in the
- * editor) so the result differs. Returns the URL without persisting it — the
- * editor stages it and saves on confirmation. url is null if none was found
- * (no PEXELS_API_KEY or no match).
+ * Generate a fresh AI image for a draft, built from its image prompt (or topic).
+ * Each call uses a new random seed, so the result differs from the current one.
+ * Returns the URL without persisting it — the editor stages it and saves on
+ * confirmation. url is null if generation is disabled (IMAGE_GEN=off).
  */
 export async function repickDraftImageAction(
   draftId: string,
