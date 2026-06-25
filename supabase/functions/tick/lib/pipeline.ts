@@ -10,7 +10,7 @@ import {
 import { generatePost, type GeneratedItem, type GenerateInput, type VoiceCfg } from "./claude.ts";
 import { resolveModel } from "./ai-credentials.ts";
 import { pickFreshArticle } from "./news.ts";
-import { generateImage } from "./image-gen.ts";
+import { searchAndRehostFirst, searchImages, type ImageCandidate } from "./image-search.ts";
 import { publishDraft } from "./publish.ts";
 import { computeScheduleInfo } from "./schedule.ts";
 import { domainOf } from "./source-trust.ts";
@@ -182,12 +182,13 @@ export async function runPipelineForProject(
 
   if (result.posts.length === 0) return { ok: false, error: "Model returned no posts." };
 
-  // Best-effort AI-generated image, built from the model's visual prompt for the
-  // post (falling back to the matched topic). Each generation is unique, so no
-  // dedup is needed; we warm it now so an auto-published post ships a ready
-  // image. null when IMAGE_GEN=off or no prompt, leaving the draft text-only.
+  // Best-effort image: search Google Images (Bright Data) for the model's query
+  // (falling back to the matched topic) and re-host the first result that
+  // downloads cleanly, so the published link is stable. No human is here to
+  // pick, so we take the first. null when no Bright Data creds or no usable
+  // result, leaving the draft text-only.
   const imageQuery = result.imageQuery || article.matchedTopic || topics[0] || "";
-  const imageUrl = await generateImage(imageQuery, { warm: true });
+  const imageUrl = await searchAndRehostFirst(project.id, imageQuery);
 
   // Build storage shape
   const { contentByLang, contentByPlatform } = buildContentShape(result.posts, isPerPlatform);
@@ -215,8 +216,8 @@ export async function runPipelineForProject(
         // the same story faithfully, not from the headline alone.
         sourceExcerpt: article.summary || null,
         imageUrl,
-        // Persist the model's image prompt so "regenerate image" can build from
-        // the same on-subject prompt the auto-pick used, not just the topic.
+        // Persist the model's image query so "Find images" can search with the
+        // same on-subject query the auto-pick used, not just the topic.
         imageQuery: result.imageQuery,
         contentByLang,
         // JSON columns take plain objects/null directly.
@@ -357,15 +358,15 @@ export async function regenerateDraft(
 }
 
 export type PickPhotoResult =
-  | { ok: true; url: string | null }
+  | { ok: true; candidates: ImageCandidate[] }
   | { ok: false; error: string };
 
-// Re-generate the image for an existing draft, built from the model's visual
-// prompt (or the topic, for older/manually-composed drafts). A fresh random
-// seed makes the result a *different* image every time, so `_exclude` (the
-// editor's staged/current pick) is no longer needed. Returns the URL only;
-// persisting it is the caller's job, so the editor can stage it and save on the
-// user's confirmation. url is null when IMAGE_GEN=off or there's no prompt.
+// Search Google Images for an existing draft, keyed on the model's image query
+// (or the topic, for older/manually-composed drafts), and return a list of
+// candidates for the editor to show so the user can pick one. Nothing is
+// re-hosted or persisted here — that happens only for the candidate the user
+// actually picks (see rehostDraftImageAction). candidates is empty when no
+// Bright Data creds or no results.
 export async function pickDraftPhoto(
   projectId: string,
   draftId: string,
@@ -378,14 +379,13 @@ export async function pickDraftPhoto(
     .eq("projectId", projectId)
     .maybeSingle();
   if (!draft) return { ok: false, error: "Draft not found." };
-  // Prefer the model's image prompt (set at generation) for an on-subject
-  // image; fall back to the topic for older/manually-composed drafts.
+  // Prefer the model's image query (set at generation) for an on-subject
+  // search; fall back to the topic for older/manually-composed drafts.
   const query = draft.imageQuery || draft.topic || draft.topics?.[0] || "";
-  if (!query) return { ok: false, error: "Draft has no topic to generate from." };
+  if (!query) return { ok: false, error: "Draft has no topic to search on." };
 
-  // No warm: the editor preview <img> renders the URL and warms the CDN cache.
-  const url = await generateImage(query);
-  return { ok: true, url };
+  const candidates = await searchImages(query);
+  return { ok: true, candidates };
 }
 
 export async function publishDueScheduledDrafts(): Promise<{

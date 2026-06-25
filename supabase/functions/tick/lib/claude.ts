@@ -96,19 +96,15 @@ export type GenerateInput = {
 /** Highest confidence we let an unverified story claim — forces human review. */
 const UNVERIFIED_CONFIDENCE_CEILING = 45;
 
-// The model writes a visual prompt for the post it just wrote, fed to an AI
-// image generator to make a bespoke illustration — far more on-subject than a
-// stock lookup. Shared by both voice modes so the instruction reads identically.
+// The model writes a Google Images search query from the post it just wrote —
+// far more on-subject than the bare topic label. Shared by both voice modes so
+// the instruction reads identically.
 const IMAGE_QUERY_RULE =
-  'Also return a top-level "imageQuery": a vivid one-sentence English' +
-  " description (under 30 words) of an image that illustrates this post, to be" +
-  " fed to an AI image generator. Describe a concrete scene — the subject," +
-  " setting, objects, and mood — that captures the post's core idea (e.g. \"a" +
-  " row of glowing server racks in a dark data center, cool blue light\" or" +
-  ' "wind turbines on a green hillside at golden hour"). Include people only if' +
-  " they are central to the story; otherwise depict objects, places, or" +
-  " concepts. Do NOT put any text, words, letters, logos, or charts in the" +
-  " image. No hashtags, no quotes around the value.";
+  'Also return a top-level "imageQuery": a 2-5 word English phrase naming a' +
+  " concrete, photographable subject to search Google Images for, that visually" +
+  " fits the post. Prefer tangible scenes or objects over abstractions (e.g." +
+  ' "data center servers", "wind turbines hillside" — not "innovation" or' +
+  ' "growth"). Plain words, no punctuation, no hashtags.';
 
 function verificationBlock(fc: FactCheck): string {
   if (fc.verdict === "TRUSTED") {
@@ -146,7 +142,7 @@ export type GenerationResult = {
   tokensOutput: number;
   costUsd: number;
   confidence: number;
-  /** Model-built visual prompt for this post's image, or null if absent. */
+  /** Model-built Google Images search query for this post, or null if absent. */
   imageQuery: string | null;
 };
 
@@ -220,7 +216,7 @@ function buildSystemPrompt(input: Omit<GenerateInput, "article">): string {
       "",
       "## Output format",
       "Return STRICT JSON only, no prose:",
-      '{ "posts": [ { "language": "en", "content": "...", "confidence": 90 }, ... ], "imageQuery": "a row of glowing server racks in a dark data center, cool blue light", "confidence": 90 }',
+      '{ "posts": [ { "language": "en", "content": "...", "confidence": 90 }, ... ], "imageQuery": "data center servers", "confidence": 90 }',
       "",
       `Produce ONE post per language (${langLabels}). The same text is sent to all selected platforms.`,
       "",
@@ -239,7 +235,7 @@ function buildSystemPrompt(input: Omit<GenerateInput, "article">): string {
     lines.push(
       "## Output format",
       "Return STRICT JSON only, no prose:",
-      '{ "posts": [ { "platform": "LINKEDIN", "language": "en", "content": "...", "confidence": 90 }, ... ], "imageQuery": "a row of glowing server racks in a dark data center, cool blue light" }',
+      '{ "posts": [ { "platform": "LINKEDIN", "language": "en", "content": "...", "confidence": 90 }, ... ], "imageQuery": "data center servers" }',
       "",
       `Produce ONE post per (platform, language) combination. Platforms: ${input.targets.join(", ")}. Languages: ${langLabels}. Each variant must honor its platform's voice block above.`,
       "",
@@ -327,12 +323,12 @@ export async function generatePost(
     confidence = Math.min(confidence, UNVERIFIED_CONFIDENCE_CEILING);
   }
 
-  // Normalize the model's image prompt: trim, collapse whitespace, and cap the
-  // length so a runaway response can't bloat the generator URL. null when the
+  // Normalize the model's image query: trim, collapse whitespace, and cap the
+  // length so a stray sentence can't become a junk search query. null when the
   // model omitted it — the caller falls back to the topic.
   const imageQuery =
     typeof parsed.imageQuery === "string" && parsed.imageQuery.trim()
-      ? parsed.imageQuery.trim().replace(/\s+/g, " ").slice(0, 240)
+      ? parsed.imageQuery.trim().replace(/\s+/g, " ").slice(0, 80)
       : null;
 
   return {

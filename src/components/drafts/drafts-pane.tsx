@@ -25,13 +25,15 @@ import {
 import {
   approveDraftAction,
   regenerateDraftAction,
-  repickDraftImageAction,
+  rehostDraftImageAction,
   retryDraftAction,
+  searchDraftImagesAction,
   skipDraftAction,
   updateDraftContentAction,
   updateDraftImageAction,
   uploadDraftImageAction,
 } from "@/server/draft-actions";
+import type { ImageCandidate } from "@/lib/types";
 import { fmtDateTime, fmtTimeOnly } from "@/lib/format";
 import { PlatformIcon } from "@/components/platform-icon";
 
@@ -159,7 +161,12 @@ export function DraftsPane({
   // persisted on save only, so a cancelled edit leaves the draft untouched.
   const [editImageUrl, setEditImageUrl] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
+  // Image search: `pickingPhoto` covers a search-in-progress; `imageCandidates`
+  // are the results shown for the user to pick from; `choosingUrl` is the
+  // candidate currently being re-hosted after a click.
   const [pickingPhoto, setPickingPhoto] = useState(false);
+  const [imageCandidates, setImageCandidates] = useState<ImageCandidate[]>([]);
+  const [choosingUrl, setChoosingUrl] = useState<string | null>(null);
 
   const active = useMemo(
     () => drafts.find((d) => d.id === activeId) ?? drafts[0] ?? null,
@@ -180,6 +187,7 @@ export function DraftsPane({
     // Reset language so we don't point at a language the newly-picked draft lacks
     // (which would render a blank preview and copy an empty string).
     setEditLang(null);
+    setImageCandidates([]);
   }
 
   function startEdit() {
@@ -194,6 +202,7 @@ export function DraftsPane({
     setEditing(false);
     setEditBuffer({});
     setEditImageUrl(null);
+    setImageCandidates([]);
   }
 
   // Persist a pending photo change for `active`, if any. Returns false (and
@@ -223,25 +232,45 @@ export function DraftsPane({
       .finally(() => setUploadingImage(false));
   }
 
-  // Generate a fresh AI image for the draft's topic and stage it (saved on Save,
-  // like an upload). A new random seed makes each regeneration a different image.
-  function repickPhoto() {
+  // Search Google Images for the draft's topic and show the results so the user
+  // can pick one. Nothing is staged until they click a result (chooseCandidate).
+  function findImages() {
     if (!active || pickingPhoto) return;
     setPickingPhoto(true);
-    repickDraftImageAction(active.id, editImageUrl)
+    setImageCandidates([]);
+    searchDraftImagesAction(active.id)
       .then((res) => {
         if (!res.ok) {
           toast.error(res.error);
           return;
         }
-        if (!res.url) {
-          toast.error("Couldn't generate an image for this topic.");
+        if (res.candidates.length === 0) {
+          toast.error("No images found for this topic.");
           return;
         }
-        setEditImageUrl(res.url);
+        setImageCandidates(res.candidates);
       })
       .catch((e) => toast.error((e as Error).message))
       .finally(() => setPickingPhoto(false));
+  }
+
+  // Re-host the picked search result into our bucket and stage it (saved on
+  // Save, like an upload). Re-hosting because raw result URLs often block
+  // hotlinking; if this one fails to download, the user can pick another.
+  function chooseCandidate(url: string) {
+    if (!active || choosingUrl) return;
+    setChoosingUrl(url);
+    rehostDraftImageAction(active.id, url)
+      .then((res) => {
+        if (!res.ok) {
+          toast.error(res.error);
+          return;
+        }
+        setEditImageUrl(res.url);
+        setImageCandidates([]);
+      })
+      .catch((e) => toast.error((e as Error).message))
+      .finally(() => setChoosingUrl(null));
   }
 
   function saveEdit() {
@@ -607,7 +636,7 @@ export function DraftsPane({
                         type="file"
                         accept="image/png,image/jpeg,image/webp,image/gif"
                         style={{ display: "none" }}
-                        disabled={uploadingImage || pickingPhoto}
+                        disabled={uploadingImage || pickingPhoto || !!choosingUrl}
                         onChange={(e) => {
                           onPickImage(e.target.files?.[0]);
                           e.target.value = "";
@@ -617,24 +646,97 @@ export function DraftsPane({
                     <button
                       type="button"
                       className="btn xs ghost"
-                      onClick={repickPhoto}
-                      disabled={uploadingImage || pickingPhoto}
-                      title="Generate a fresh AI image for this topic"
+                      onClick={findImages}
+                      disabled={uploadingImage || pickingPhoto || !!choosingUrl}
+                      title="Search Google Images for this topic"
                     >
                       <Images size={11} />
-                      <span>{pickingPhoto ? "Generating…" : "Generate image"}</span>
+                      <span>{pickingPhoto ? "Searching…" : "Find images"}</span>
                     </button>
                     {editImageUrl && (
                       <button
                         type="button"
                         className="btn xs ghost danger"
                         onClick={() => setEditImageUrl(null)}
-                        disabled={uploadingImage || pickingPhoto}
+                        disabled={uploadingImage || pickingPhoto || !!choosingUrl}
                       >
                         <X size={11} />
                         <span>Remove</span>
                       </button>
                     )}
+                  </div>
+                )}
+                {editing && imageCandidates.length > 0 && (
+                  <div style={{ marginBottom: 14, maxWidth: 720 }}>
+                    <div
+                      className="muted"
+                      style={{ fontSize: 11, marginBottom: 6 }}
+                    >
+                      Click an image to use it
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns:
+                          "repeat(auto-fill, minmax(110px, 1fr))",
+                        gap: 6,
+                      }}
+                    >
+                      {imageCandidates.map((c) => (
+                        <button
+                          key={c.url}
+                          type="button"
+                          onClick={() => chooseCandidate(c.url)}
+                          disabled={!!choosingUrl}
+                          title={c.source || "Use this image"}
+                          style={{
+                            position: "relative",
+                            padding: 0,
+                            border: "1px solid var(--border)",
+                            borderRadius: 6,
+                            overflow: "hidden",
+                            cursor: choosingUrl ? "wait" : "pointer",
+                            background: "var(--surface)",
+                            aspectRatio: "4 / 3",
+                          }}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={c.url}
+                            alt={c.source || "search result"}
+                            loading="lazy"
+                            // Hide results that won't load in the browser preview
+                            // (hotlink-blocked) so the user only sees usable ones.
+                            onError={(e) => {
+                              const btn = e.currentTarget.closest("button");
+                              if (btn) (btn as HTMLElement).style.display = "none";
+                            }}
+                            style={{
+                              width: "100%",
+                              height: "100%",
+                              objectFit: "cover",
+                              display: "block",
+                            }}
+                          />
+                          {choosingUrl === c.url && (
+                            <span
+                              style={{
+                                position: "absolute",
+                                inset: 0,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                background: "rgba(0,0,0,0.55)",
+                                color: "#fff",
+                                fontSize: 11,
+                              }}
+                            >
+                              Saving…
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {editing ? (
