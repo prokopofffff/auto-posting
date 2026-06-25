@@ -8,7 +8,7 @@ import { publishDraft } from "@/server/publish";
 import { regenerateDraft, runPipelineForProject } from "@/server/pipeline";
 import { invokeEdge } from "@/server/edge";
 import { uploadProjectImage } from "@/lib/upload-image";
-import type { Platform } from "@/lib/types";
+import type { ImageCandidate, Platform } from "@/lib/types";
 
 async function assertDraftOwnership(draftId: string) {
   const user = await getCurrentUser();
@@ -89,24 +89,49 @@ export async function uploadDraftImageAction(formData: FormData) {
 }
 
 /**
- * Generate a fresh AI image for a draft, built from its image prompt (or topic).
- * Each call uses a new random seed, so the result differs from the current one.
- * Returns the URL without persisting it — the editor stages it and saves on
- * confirmation. url is null if generation is disabled (IMAGE_GEN=off).
+ * Search Google Images (via Bright Data) for a draft, keyed on its image query
+ * (or topic), and return a list of candidates for the editor to show so the
+ * user can pick one. Nothing is persisted or re-hosted here — that happens for
+ * the chosen candidate via rehostDraftImageAction. candidates is empty if no
+ * Bright Data credentials are configured or there are no results.
  */
-export async function repickDraftImageAction(
-  draftId: string,
-  currentImageUrl?: string | null,
-) {
+export async function searchDraftImagesAction(draftId: string) {
   const owned = await assertDraftOwnership(draftId);
   if (!owned.ok) return owned;
   return invokeEdge<
-    { ok: true; url: string | null } | { ok: false; error: string }
+    { ok: true; candidates: ImageCandidate[] } | { ok: false; error: string }
   >("pick-photo", {
     projectId: owned.draft.projectId,
     draftId,
-    exclude: currentImageUrl ? [currentImageUrl] : [],
   });
+}
+
+/**
+ * Download a chosen search result and re-host it in our `post-images` bucket,
+ * returning the stable public URL. Search results are arbitrary external image
+ * URLs that often block hotlinking, so we always re-host the one the user picks
+ * rather than linking it directly. Returns the URL without attaching it — the
+ * editor stages it and saves on confirmation.
+ */
+export async function rehostDraftImageAction(draftId: string, srcUrl: string) {
+  const owned = await assertDraftOwnership(draftId);
+  if (!owned.ok) return owned;
+  let file: File;
+  try {
+    const res = await fetch(srcUrl, { signal: AbortSignal.timeout(20_000) });
+    if (!res.ok) {
+      return { ok: false as const, error: "Couldn't download that image." };
+    }
+    const blob = await res.blob();
+    // Some hosts send "image/jpg" or no type; normalize so the uploader accepts
+    // it, inferring jpeg as a last resort (the uploader re-validates the type).
+    const raw = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    const type = raw === "image/jpg" || raw === "" ? "image/jpeg" : raw;
+    file = new File([blob], "search-image", { type });
+  } catch {
+    return { ok: false as const, error: "Couldn't download that image." };
+  }
+  return uploadProjectImage(owned.draft.projectId, file);
 }
 
 export async function regenerateDraftAction(draftId: string) {

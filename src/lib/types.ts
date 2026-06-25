@@ -29,3 +29,10 @@ export type Post = Tables<"Post">;
 export type Project = Tables<"Project">;
 export type ProjectSettings = Tables<"ProjectSettings">;
 export type User = Tables<"User">;
+
+/**
+ * One Google Images result returned by the image search (Bright Data) — the
+ * full-resolution image plus where it came from. Kept in sync with the edge
+ * function's `ImageCandidate` (supabase/functions/tick/lib/image-search.ts).
+ */
+export type ImageCandidate = { url: string; sourcePage: string; source: string };
