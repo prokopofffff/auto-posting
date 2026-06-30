@@ -11,7 +11,7 @@ async function loadAiCredential(projectId: string): Promise<AiCredentialView | n
   const { data: cred } = await supabaseAdmin
     .from("AiCredential")
     .select(
-      "provider, mode, model, apiKey, oauthAccessToken, oauthExpiresAt, deepseekApiKey, creator:User!AiCredential_createdBy_fkey(email)",
+      "provider, mode, model, apiKey, oauthAccessToken, oauthExpiresAt, deepseekApiKey, openaiApiKey, codexOauthAccessToken, creator:User!AiCredential_createdBy_fkey(email)",
     )
     .eq("projectId", projectId)
     .maybeSingle();
@@ -23,6 +23,8 @@ async function loadAiCredential(projectId: string): Promise<AiCredentialView | n
     hasApiKey: !!cred.apiKey,
     hasSubscription: !!cred.oauthAccessToken,
     hasDeepSeek: !!cred.deepseekApiKey,
+    hasOpenAiKey: !!cred.openaiApiKey,
+    hasCodexSubscription: !!cred.codexOauthAccessToken,
     model: cred.model,
     connectedByEmail: cred.creator?.email ?? null,
     subscriptionExpiresAt: cred.oauthExpiresAt,

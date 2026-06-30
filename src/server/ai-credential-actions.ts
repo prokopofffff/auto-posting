@@ -8,6 +8,10 @@ import { encrypt } from "@/lib/crypto";
 import { getCurrentUser, userOwnsProject } from "@/server/project";
 import { invokeEdge } from "@/server/edge";
 import { startLogin, exchangeCode } from "@/lib/claude-oauth";
+import {
+  startLogin as startCodexLogin,
+  exchangeCode as exchangeCodexCode,
+} from "@/lib/codex-oauth";
 
 // Every action below first verifies the signed-in user owns `projectId`, and
 // stamps `createdBy` with their id. Combined with the per-project unique
@@ -101,8 +105,8 @@ export async function connectClaudeSubscriptionAction(
 // writes keep the chosen model. Both the connect upserts and the active-switch
 // update funnel through this so the rule lives in one place.
 function modelResetOnSwitch(
-  current: "ANTHROPIC" | "DEEPSEEK" | null | undefined,
-  next: "ANTHROPIC" | "DEEPSEEK",
+  current: "ANTHROPIC" | "DEEPSEEK" | "OPENAI" | null | undefined,
+  next: "ANTHROPIC" | "DEEPSEEK" | "OPENAI",
 ): { model?: null } {
   return current && current !== next ? { model: null } : {};
 }
@@ -110,7 +114,7 @@ function modelResetOnSwitch(
 // Connect actions don't hold the current row, so read just its provider first.
 async function clearModelOnProviderSwitch(
   projectId: string,
-  next: "ANTHROPIC" | "DEEPSEEK",
+  next: "ANTHROPIC" | "DEEPSEEK" | "OPENAI",
 ): Promise<{ model?: null }> {
   const { data } = await supabaseAdmin
     .from("AiCredential")
@@ -182,6 +186,101 @@ export async function connectDeepSeekApiKeyAction(input: z.input<typeof apiKeySc
   return { ok: true as const };
 }
 
+// ── OpenAI API key ───────────────────────────────────────────────────────────
+
+export async function connectOpenAiApiKeyAction(input: z.input<typeof apiKeySchema>) {
+  const parsed = apiKeySchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false as const, error: firstIssue(parsed.error) };
+  }
+  const { projectId, apiKey } = parsed.data;
+  const g = await guard(projectId);
+  if (!g.ok) return g;
+
+  await unwrap(
+    supabaseAdmin.from("AiCredential").upsert(
+      {
+        projectId,
+        provider: "OPENAI",
+        mode: "API_KEY",
+        openaiApiKey: await encrypt(apiKey),
+        createdBy: g.user.id,
+        ...(await clearModelOnProviderSwitch(projectId, "OPENAI")),
+      },
+      { onConflict: "projectId" },
+    ),
+  );
+  revalidate();
+  return { ok: true as const };
+}
+
+// ── Codex subscription: PKCE "login with code" ───────────────────────────────
+
+export async function startCodexLoginAction(projectId: string) {
+  const g = await guard(projectId);
+  if (!g.ok) return g;
+  const { url, verifier, state } = startCodexLogin();
+  return { ok: true as const, url, verifier, state };
+}
+
+const codexSubscriptionSchema = z.object({
+  projectId: z.string().min(1),
+  code: z.string().min(1),
+  verifier: z.string().min(1),
+  state: z.string().min(1),
+});
+
+export async function connectCodexSubscriptionAction(
+  input: z.input<typeof codexSubscriptionSchema>,
+) {
+  const parsed = codexSubscriptionSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false as const, error: firstIssue(parsed.error) };
+  }
+  const { projectId, code, verifier, state } = parsed.data;
+  const g = await guard(projectId);
+  if (!g.ok) return g;
+
+  let tokens;
+  try {
+    tokens = await exchangeCodexCode(code, verifier, state);
+  } catch (e) {
+    return { ok: false as const, error: (e as Error).message };
+  }
+
+  if (!tokens.account_id) {
+    return {
+      ok: false as const,
+      error: "Could not read your ChatGPT account from the login. Try connecting again.",
+    };
+  }
+
+  const expiresAt = new Date(
+    Date.now() + (tokens.expires_in ?? 3600) * 1000,
+  ).toISOString();
+
+  await unwrap(
+    supabaseAdmin.from("AiCredential").upsert(
+      {
+        projectId,
+        provider: "OPENAI",
+        mode: "SUBSCRIPTION",
+        codexOauthAccessToken: await encrypt(tokens.access_token),
+        codexOauthRefreshToken: tokens.refresh_token
+          ? await encrypt(tokens.refresh_token)
+          : null,
+        codexOauthExpiresAt: expiresAt,
+        codexAccountId: tokens.account_id,
+        createdBy: g.user.id,
+        ...(await clearModelOnProviderSwitch(projectId, "OPENAI")),
+      },
+      { onConflict: "projectId" },
+    ),
+  );
+  revalidate();
+  return { ok: true as const };
+}
+
 // ── Active-credential switch & model ────────────────────────────────────────
 
 // Which connected credential the project generates with. Maps a UI "kind" to
@@ -190,6 +289,8 @@ const KIND = {
   CLAUDE_API_KEY: { provider: "ANTHROPIC", mode: "API_KEY" },
   CLAUDE_SUBSCRIPTION: { provider: "ANTHROPIC", mode: "SUBSCRIPTION" },
   DEEPSEEK: { provider: "DEEPSEEK" },
+  OPENAI_API_KEY: { provider: "OPENAI", mode: "API_KEY" },
+  CODEX_SUBSCRIPTION: { provider: "OPENAI", mode: "SUBSCRIPTION" },
 } as const;
 
 export type AiCredentialKind = keyof typeof KIND;
@@ -199,7 +300,7 @@ export async function setAiCredentialAction(projectId: string, kind: AiCredentia
   if (!g.ok) return g;
   const { data: cred } = await supabaseAdmin
     .from("AiCredential")
-    .select("apiKey, oauthAccessToken, deepseekApiKey, provider")
+    .select("apiKey, oauthAccessToken, deepseekApiKey, openaiApiKey, codexOauthAccessToken, provider")
     .eq("projectId", projectId)
     .maybeSingle();
   if (!cred) return { ok: false as const, error: "Connect a credential first." };
@@ -212,6 +313,12 @@ export async function setAiCredentialAction(projectId: string, kind: AiCredentia
   }
   if (kind === "DEEPSEEK" && !cred.deepseekApiKey) {
     return { ok: false as const, error: "No DeepSeek API key connected." };
+  }
+  if (kind === "OPENAI_API_KEY" && !cred.openaiApiKey) {
+    return { ok: false as const, error: "No OpenAI API key connected." };
+  }
+  if (kind === "CODEX_SUBSCRIPTION" && !cred.codexOauthAccessToken) {
+    return { ok: false as const, error: "No Codex subscription connected." };
   }
 
   const target = KIND[kind];

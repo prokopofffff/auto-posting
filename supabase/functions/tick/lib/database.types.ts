@@ -18,6 +18,10 @@ export type Database = {
       AiCredential: {
         Row: {
           apiKey: string | null;
+          codexAccountId: string | null;
+          codexOauthAccessToken: string | null;
+          codexOauthExpiresAt: string | null;
+          codexOauthRefreshToken: string | null;
           createdAt: string;
           createdBy: string | null;
           deepseekApiKey: string | null;
@@ -27,12 +31,17 @@ export type Database = {
           oauthAccessToken: string | null;
           oauthExpiresAt: string | null;
           oauthRefreshToken: string | null;
+          openaiApiKey: string | null;
           projectId: string;
           provider: Database["public"]["Enums"]["AiProvider"];
           updatedAt: string;
         };
         Insert: {
           apiKey?: string | null;
+          codexAccountId?: string | null;
+          codexOauthAccessToken?: string | null;
+          codexOauthExpiresAt?: string | null;
+          codexOauthRefreshToken?: string | null;
           createdAt?: string;
           createdBy?: string | null;
           deepseekApiKey?: string | null;
@@ -42,12 +51,17 @@ export type Database = {
           oauthAccessToken?: string | null;
           oauthExpiresAt?: string | null;
           oauthRefreshToken?: string | null;
+          openaiApiKey?: string | null;
           projectId: string;
           provider?: Database["public"]["Enums"]["AiProvider"];
           updatedAt?: string;
         };
         Update: {
           apiKey?: string | null;
+          codexAccountId?: string | null;
+          codexOauthAccessToken?: string | null;
+          codexOauthExpiresAt?: string | null;
+          codexOauthRefreshToken?: string | null;
           createdAt?: string;
           createdBy?: string | null;
           deepseekApiKey?: string | null;
@@ -57,6 +71,7 @@ export type Database = {
           oauthAccessToken?: string | null;
           oauthExpiresAt?: string | null;
           oauthRefreshToken?: string | null;
+          openaiApiKey?: string | null;
           projectId?: string;
           provider?: Database["public"]["Enums"]["AiProvider"];
           updatedAt?: string;
@@ -565,7 +580,7 @@ export type Database = {
     };
     Enums: {
       AiCredentialMode: "API_KEY" | "SUBSCRIPTION";
-      AiProvider: "ANTHROPIC" | "DEEPSEEK";
+      AiProvider: "ANTHROPIC" | "DEEPSEEK" | "OPENAI";
       DraftStatus:
         | "PENDING"
         | "APPROVED"
@@ -681,7 +696,7 @@ export const Constants = {
   public: {
     Enums: {
       AiCredentialMode: ["API_KEY", "SUBSCRIPTION"],
-      AiProvider: ["ANTHROPIC", "DEEPSEEK"],
+      AiProvider: ["ANTHROPIC", "DEEPSEEK", "OPENAI"],
       DraftStatus: [
         "PENDING",
         "APPROVED",
