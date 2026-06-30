@@ -28,6 +28,17 @@ import {
   deepseekListModels,
   isDeepSeekModel,
 } from "./deepseek.ts";
+import {
+  OPENAI_DEFAULT_MODEL,
+  openaiComplete,
+  openaiListModels,
+  isOpenAiModel,
+} from "./openai.ts";
+import {
+  CODEX_DEFAULT_MODEL,
+  codexComplete,
+  codexListModels,
+} from "./codex.ts";
 
 export const OAUTH_BETA_HEADER = "oauth-2025-04-20";
 export const CLAUDE_CODE_PREAMBLE =
@@ -54,7 +65,7 @@ export type ModelOption = { id: string; displayName: string };
 export type CompletionRequest = { system: string; user: string; maxTokens: number };
 export type CompletionResult = { text: string; tokensInput: number; tokensOutput: number };
 
-export type AiProvider = "ANTHROPIC" | "DEEPSEEK";
+export type AiProvider = "ANTHROPIC" | "DEEPSEEK" | "OPENAI";
 
 /**
  * A resolved, ready-to-call model. `complete` runs one turn; `listModels`
@@ -67,6 +78,30 @@ export type ResolvedModel = {
   complete: (req: CompletionRequest) => Promise<CompletionResult>;
   listModels: () => Promise<{ models: ModelOption[]; live: boolean }>;
 };
+
+// Codex (ChatGPT subscription) token refresh — same auth server as the connect
+// flow (src/lib/codex-oauth.ts). Form-encoded, public PKCE client, no secret.
+const CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token";
+const CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+
+async function refreshCodexToken(refreshToken: string): Promise<RefreshedTokens> {
+  const res = await fetch(CODEX_TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: CODEX_OAUTH_CLIENT_ID,
+      scope: "openid profile email offline_access",
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Codex subscription token refresh failed (${res.status}). Reconnect in Settings → AI.`,
+    );
+  }
+  return (await res.json()) as RefreshedTokens;
+}
 
 async function refreshSubscriptionToken(refreshToken: string): Promise<RefreshedTokens> {
   const res = await fetch(TOKEN_URL, {
@@ -184,6 +219,65 @@ export async function resolveModel(projectId: string): Promise<ResolvedModel> {
       model,
       complete: deepseekComplete(apiKey, model),
       listModels: () => deepseekListModels(apiKey),
+    };
+  }
+
+  // ── OpenAI ──────────────────────────────────────────────────────────────
+  if (cred.provider === "OPENAI") {
+    if (cred.mode === "SUBSCRIPTION") {
+      // Codex subscription: tokens only work against the ChatGPT backend, with a
+      // different default model set than the API. See codex.ts.
+      const model = isOpenAiModel(cred.model) ? cred.model! : CODEX_DEFAULT_MODEL;
+      if (!cred.codexOauthAccessToken) {
+        throw new Error("Codex subscription is not connected. Reconnect in Settings → AI.");
+      }
+      if (!cred.codexAccountId) {
+        throw new Error("Codex subscription is missing its account id. Reconnect in Settings → AI.");
+      }
+      // getValidAccessToken returns a PLAINTEXT token (refreshing + persisting if
+      // it's near expiry) — do NOT decrypt it again.
+      const accessToken = await getValidAccessToken(
+        {
+          accessToken: cred.codexOauthAccessToken,
+          refreshToken: cred.codexOauthRefreshToken,
+          expiresAt: cred.codexOauthExpiresAt,
+        },
+        {
+          skewMs: REFRESH_SKEW_MS,
+          refresh: refreshCodexToken,
+          persist: async ({ accessToken, refreshToken, expiresAt }) => {
+            await unwrap(
+              supabaseAdmin
+                .from("AiCredential")
+                .update({
+                  codexOauthAccessToken: accessToken,
+                  codexOauthRefreshToken: refreshToken,
+                  codexOauthExpiresAt: expiresAt,
+                })
+                .eq("id", cred.id),
+            );
+          },
+        },
+      );
+      return {
+        provider: "OPENAI",
+        model,
+        complete: codexComplete(accessToken, cred.codexAccountId, model),
+        listModels: codexListModels,
+      };
+    }
+
+    // API_KEY → standard api.openai.com path.
+    const model = isOpenAiModel(cred.model) ? cred.model! : OPENAI_DEFAULT_MODEL;
+    if (!cred.openaiApiKey) {
+      throw new Error("No OpenAI API key set. Add one in Settings → AI.");
+    }
+    const apiKey = await decrypt(cred.openaiApiKey);
+    return {
+      provider: "OPENAI",
+      model,
+      complete: openaiComplete(apiKey, model),
+      listModels: () => openaiListModels(apiKey),
     };
   }
 
