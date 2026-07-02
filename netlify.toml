@@ -1,19 +1,48 @@
-# Netlify configuration.
+# Netlify configuration for the TanStack Start (Vite) app.
 #
-# The official Netlify Next.js runtime (@netlify/plugin-nextjs) is detected and
-# installed automatically when a Next.js app is present — no [[plugins]] entry
-# is required. It compiles server actions and route handlers into Netlify
-# Functions (and Edge Functions where applicable). Prisma was removed during the
-# supabase-js migration, so the build is a plain `next build` with no
-# `prisma generate` prebuild step.
+# This is a TanStack Start app built with Vite (the old @netlify/plugin-nextjs
+# runtime no longer applies). `vite build` (run by `pnpm build`) emits:
+#   - dist/client            — hashed browser assets + files copied from public/
+#   - dist/server/server.js  — the SSR entry, a web-standard `{ fetch }` handler
+#
+# This Start version ships no hosting preset, so SSR is served by a small
+# Netlify Function (netlify/functions/server.mts) that forwards the request to
+# that fetch handler. The catch-all redirect below routes everything that is not
+# a static file in `publish` to that function. Static assets (/assets/*, public
+# files) are served by the CDN first because the redirect is NOT forced.
 
 [build]
-  # pnpm is the package manager (pnpm-lock.yaml is the source of truth). Netlify
-  # auto-detects pnpm from the lockfile and runs the install; the command below
-  # is the build step.
+  # pnpm is auto-detected from pnpm-lock.yaml. `vite build` writes dist/client +
+  # dist/server; functions are bundled afterwards, so dist/server exists when the
+  # SSR function is bundled.
   command = "pnpm build"
-  publish = ".next"
+  publish = "dist/client"
 
 [build.environment]
   # Pin the Node major used for builds and functions. Keep in sync with .nvmrc.
   NODE_VERSION = "22"
+
+[functions]
+  # esbuild bundles the SSR function together with dist/server/server.js.
+  node_bundler = "esbuild"
+
+# Catch-all: any path without a matching static file in dist/client is handled
+# by the SSR function. status = 200 (rewrite, not a browser redirect); not
+# forced, so real files in the publish dir win.
+[[redirects]]
+  from = "/*"
+  to = "/.netlify/functions/server"
+  status = 200
+
+# Env vars to set in the Netlify dashboard (renamed during the migration):
+#   VITE_SUPABASE_URL       (was NEXT_PUBLIC_SUPABASE_URL) — read by both the
+#                           client bundle (import.meta.env, inlined at BUILD time)
+#                           and the server (process.env at runtime), so it must be
+#                           present as a plain env var during the build.
+#   VITE_SUPABASE_ANON_KEY  (was NEXT_PUBLIC_SUPABASE_ANON_KEY) — same as above.
+# Server-only secrets stay un-prefixed (process.env): SUPABASE_SERVICE_ROLE_KEY,
+# ENCRYPTION_KEY, CRON_SECRET, AUTH_URL, LINKEDIN_*, TELEGRAM_BOT_TOKEN,
+# NEWSAPI_KEY, BRIGHTDATA_*.
+#
+# Scheduling stays on pg_cron -> the Supabase edge function directly; the
+# /api/cron/tick route here is only a manual fallback trigger.

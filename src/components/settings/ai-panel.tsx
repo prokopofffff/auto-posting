@@ -1,7 +1,5 @@
-"use client";
-
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { KeyRound, Sparkles, Trash2, ExternalLink, Brain } from "lucide-react";
 import {
@@ -97,7 +95,7 @@ export function AiPanel({
     if (!connected) return;
     setLoadingModels(true);
     startTransition(async () => {
-      const res = await listAiModelsAction(projectId);
+      const res = await listAiModelsAction({ data: projectId });
       setLoadingModels(false);
       if (!res.ok) {
         toast.error(res.error);
@@ -122,7 +120,7 @@ export function AiPanel({
       : initial?.hasDeepSeek;
     if (!can || next === activeKind) return;
     startTransition(async () => {
-      const res = await setAiCredentialAction(projectId, next);
+      const res = await setAiCredentialAction({ data: { projectId, kind: next } });
       if (!res.ok) {
         toast.error(res.error);
         return;
@@ -134,50 +132,50 @@ export function AiPanel({
         : "Claude API key";
       toast.success(`Using ${label}.`);
       resetModelForProvider(providerOf(next));
-      router.refresh();
+      await router.invalidate();
     });
   }
 
   function saveApiKey() {
     if (!apiKey.trim()) { toast.error("Paste an API key first."); return; }
     startTransition(async () => {
-      const res = await connectClaudeApiKeyAction({ projectId, apiKey });
+      const res = await connectClaudeApiKeyAction({ data: { projectId, apiKey } });
       if (!res.ok) { toast.error(res.error); return; }
       toast.success("API key saved.");
       setApiKey("");
       resetModelForProvider("ANTHROPIC");
-      router.refresh();
+      await router.invalidate();
     });
   }
 
   function saveDeepseekKey() {
     if (!deepseekKey.trim()) { toast.error("Paste an API key first."); return; }
     startTransition(async () => {
-      const res = await connectDeepSeekApiKeyAction({ projectId, apiKey: deepseekKey });
+      const res = await connectDeepSeekApiKeyAction({ data: { projectId, apiKey: deepseekKey } });
       if (!res.ok) { toast.error(res.error); return; }
       toast.success("DeepSeek API key saved.");
       setDeepseekKey("");
       resetModelForProvider("DEEPSEEK");
-      router.refresh();
+      await router.invalidate();
     });
   }
 
   function saveOpenAiKey() {
     if (!openaiKey.trim()) { toast.error("Paste an API key first."); return; }
     startTransition(async () => {
-      const res = await connectOpenAiApiKeyAction({ projectId, apiKey: openaiKey });
+      const res = await connectOpenAiApiKeyAction({ data: { projectId, apiKey: openaiKey } });
       if (!res.ok) { toast.error(res.error); return; }
       toast.success("OpenAI API key saved.");
       setOpenaiKey("");
       resetModelForProvider("OPENAI");
-      router.refresh();
+      await router.invalidate();
     });
   }
 
   function beginCodexLogin() {
     const popup = window.open("about:blank", "_blank");
     startTransition(async () => {
-      const res = await startCodexLoginAction(projectId);
+      const res = await startCodexLoginAction({ data: projectId });
       if (!res.ok) {
         popup?.close();
         toast.error(res.error);
@@ -201,10 +199,12 @@ export function AiPanel({
     if (!codexCode.trim()) { toast.error("Paste the code shown after login."); return; }
     startTransition(async () => {
       const res = await connectCodexSubscriptionAction({
-        projectId,
-        code: codexCode,
-        verifier: codexPkce.verifier,
-        state: codexPkce.state,
+        data: {
+          projectId,
+          code: codexCode,
+          verifier: codexPkce.verifier,
+          state: codexPkce.state,
+        },
       });
       if (!res.ok) { toast.error(res.error); return; }
       toast.success("Codex subscription connected.");
@@ -212,7 +212,7 @@ export function AiPanel({
       setCodexPkce(null);
       setCodexLoginUrl(null);
       resetModelForProvider("OPENAI");
-      router.refresh();
+      await router.invalidate();
     });
   }
 
@@ -220,7 +220,7 @@ export function AiPanel({
     setModel(next);
     if (!next) return;
     startTransition(async () => {
-      const res = await setAiModelAction({ projectId, model: next });
+      const res = await setAiModelAction({ data: { projectId, model: next } });
       if (!res.ok) toast.error(res.error);
       else toast.success("Model updated.");
     });
@@ -231,10 +231,10 @@ export function AiPanel({
       return;
     }
     startTransition(async () => {
-      const res = await disconnectAiCredentialAction(projectId);
+      const res = await disconnectAiCredentialAction({ data: projectId });
       if (!res.ok) { toast.error(res.error); return; }
       toast.success("Disconnected.");
-      router.refresh();
+      await router.invalidate();
     });
   }
 

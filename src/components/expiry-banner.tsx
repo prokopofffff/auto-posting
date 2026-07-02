@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
 import { daysUntil } from "@/lib/format";
 
@@ -75,12 +74,12 @@ export function ExpiryBanner({
           {relevant.length > 1 ? ` (${relevant.length} connections affected)` : ""}
         </p>
       </div>
-      <Link
+      <a
         className={"btn sm" + (expired ? " accent" : "")}
         href={`/api/linkedin/authorize?projectId=${projectId}`}
       >
         {expired ? "Reconnect LinkedIn" : "Reconnect now"}
-      </Link>
+      </a>
     </div>
   );
 }

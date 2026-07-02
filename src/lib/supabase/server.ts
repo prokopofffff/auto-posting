@@ -1,28 +1,36 @@
-import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
+import { getCookies, setCookie } from "@tanstack/react-start/server";
 import type { Database } from "@/lib/database.types";
 
-// Cookie-bound anon-key client for Server Components / Actions / Route Handlers.
-// Tracks the signed-in user and respects RLS. `cookies()` is async in Next 16.
+// Cookie-bound anon-key client for server functions / server routes / loaders.
+// Tracks the signed-in user and respects RLS. Replaces the Next `cookies()`
+// store with TanStack Start's request-scoped cookie helpers
+// (getCookies/setCookie from @tanstack/react-start/server), which operate on the
+// current request/response via AsyncLocalStorage.
+//
+// Kept async to preserve the `await createClient()` call convention across the
+// codebase (it was async under Next 16's async cookies()).
 export async function createClient() {
-  const cookieStore = await cookies();
-
   return createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    process.env.VITE_SUPABASE_URL!,
+    process.env.VITE_SUPABASE_ANON_KEY!,
     {
       cookies: {
         getAll() {
-          return cookieStore.getAll();
+          return Object.entries(getCookies()).map(([name, value]) => ({
+            name,
+            value,
+          }));
         },
         setAll(cookiesToSet) {
           try {
             for (const { name, value, options } of cookiesToSet) {
-              cookieStore.set(name, value, options);
+              setCookie(name, value, options);
             }
           } catch {
-            // Called from a Server Component, where cookies are read-only.
-            // Session refresh is handled by middleware, so this is safe to ignore.
+            // No writable response in this context (e.g. a render after headers
+            // were flushed). Session refresh runs in the global request
+            // middleware, so dropping a write here is safe.
           }
         },
       },

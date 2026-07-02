@@ -1,7 +1,5 @@
-"use client";
-
 import { useEffect, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { Link, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Check, Trash2 } from "lucide-react";
 import { saveSettingsAction } from "@/server/settings-actions";
@@ -220,6 +218,7 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
     }
     startTransition(async () => {
       const res = await saveSettingsAction({
+        data: {
         projectId: initial.projectId,
         projectName: name,
         topics: initial.topics,
@@ -250,13 +249,14 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
                 ]),
               )
             : null,
+        },
       });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
       toast.success("Settings saved.");
-      router.refresh();
+      await router.invalidate();
     });
   }
 
@@ -319,13 +319,13 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
     )
       return;
     startTransition(async () => {
-      const res = await deleteProjectAction(initial.projectId);
+      const res = await deleteProjectAction({ data: initial.projectId });
       if (res && !res.ok) {
         toast.error(res.error);
         return;
       }
       // Server action redirects on success
-      router.refresh();
+      await router.invalidate();
     });
   }
 
@@ -584,12 +584,12 @@ export function SettingsTabs({ initial }: { initial: SettingsInitial }) {
             <div className="field-help">
               {initial.topics.length} topic
               {initial.topics.length === 1 ? "" : "s"} configured · manage on the{" "}
-              <a
-                href="/topics"
+              <Link
+                to="/topics"
                 style={{ color: "var(--accent)", borderBottom: "1px dashed currentColor" }}
               >
                 Topics page
-              </a>
+              </Link>
               .
             </div>
           </div>

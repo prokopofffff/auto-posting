@@ -1,8 +1,5 @@
-"use client";
-
 import { useMemo, useState, useTransition } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { Link, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
   Check,
@@ -209,7 +206,9 @@ export function DraftsPane({
   // toasts) on failure so callers can abort. No-op when the photo is unchanged.
   async function persistImage(): Promise<boolean> {
     if (!active || editImageUrl === active.imageUrl) return true;
-    const res = await updateDraftImageAction(active.id, editImageUrl);
+    const res = await updateDraftImageAction({
+      data: { draftId: active.id, imageUrl: editImageUrl },
+    });
     if (!res.ok) {
       toast.error(res.error);
       return false;
@@ -223,7 +222,7 @@ export function DraftsPane({
     const fd = new FormData();
     fd.set("draftId", active.id);
     fd.set("file", file);
-    uploadDraftImageAction(fd)
+    uploadDraftImageAction({ data: fd })
       .then((res) => {
         if (!res.ok) toast.error(res.error);
         else setEditImageUrl(res.url);
@@ -238,7 +237,7 @@ export function DraftsPane({
     if (!active || pickingPhoto) return;
     setPickingPhoto(true);
     setImageCandidates([]);
-    searchDraftImagesAction(active.id)
+    searchDraftImagesAction({ data: active.id })
       .then((res) => {
         if (!res.ok) {
           toast.error(res.error);
@@ -260,7 +259,7 @@ export function DraftsPane({
   function chooseCandidate(url: string) {
     if (!active || choosingUrl) return;
     setChoosingUrl(url);
-    rehostDraftImageAction(active.id, url)
+    rehostDraftImageAction({ data: { draftId: active.id, srcUrl: url } })
       .then((res) => {
         if (!res.ok) {
           toast.error(res.error);
@@ -276,7 +275,9 @@ export function DraftsPane({
   function saveEdit() {
     if (!active) return;
     startTransition(async () => {
-      const res = await updateDraftContentAction(active.id, editBuffer);
+      const res = await updateDraftContentAction({
+        data: { draftId: active.id, contentByLang: editBuffer },
+      });
       if (!res.ok) {
         toast.error(res.error);
         return;
@@ -284,7 +285,7 @@ export function DraftsPane({
       if (!(await persistImage())) return;
       toast.success("Draft updated.");
       setEditing(false);
-      router.refresh();
+      await router.invalidate();
     });
   }
 
@@ -292,61 +293,63 @@ export function DraftsPane({
     if (!active) return;
     startTransition(async () => {
       if (editing) {
-        const upd = await updateDraftContentAction(active.id, editBuffer);
+        const upd = await updateDraftContentAction({
+          data: { draftId: active.id, contentByLang: editBuffer },
+        });
         if (!upd.ok) {
           toast.error(upd.error);
           return;
         }
         if (!(await persistImage())) return;
       }
-      const res = await approveDraftAction(active.id);
+      const res = await approveDraftAction({ data: active.id });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
       toast.success("Published.");
       setEditing(false);
-      router.refresh();
+      await router.invalidate();
     });
   }
 
   function skip() {
     if (!active) return;
     startTransition(async () => {
-      const res = await skipDraftAction(active.id);
+      const res = await skipDraftAction({ data: active.id });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
       toast.success("Skipped.");
-      router.refresh();
+      await router.invalidate();
     });
   }
 
   function regenerate() {
     if (!active) return;
     startTransition(async () => {
-      const res = await regenerateDraftAction(active.id);
+      const res = await regenerateDraftAction({ data: active.id });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
       toast.success("Regenerated.");
       setEditing(false);
-      router.refresh();
+      await router.invalidate();
     });
   }
 
   function retry() {
     if (!active) return;
     startTransition(async () => {
-      const res = await retryDraftAction(active.id);
+      const res = await retryDraftAction({ data: active.id });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
       toast.success("Republished.");
-      router.refresh();
+      await router.invalidate();
     });
   }
 
@@ -356,8 +359,12 @@ export function DraftsPane({
     navigator.clipboard.writeText(t).then(() => toast.success("Copied."));
   }
 
-  const filterHrefFor = (id: keyof DraftsCounts) =>
-    id === "pending" ? "/drafts" : `/drafts?status=${id}`;
+  // "pending" is the default filter (no ?status), so it maps to an empty search;
+  // every other tab sets ?status=<id>. Matches the loader's activeFilter logic.
+  const filterSearchFor = (
+    id: keyof DraftsCounts,
+  ): { status?: keyof DraftsCounts } =>
+    id === "pending" ? {} : { status: id };
 
   return (
     <>
@@ -387,9 +394,10 @@ export function DraftsPane({
         {FILTERS.map((t) => (
           <Link
             key={t.id}
-            href={filterHrefFor(t.id)}
+            to="/drafts"
+            search={filterSearchFor(t.id)}
             className={"tab" + (activeFilter === t.id ? " active" : "")}
-            scroll={false}
+            resetScroll={false}
           >
             {t.label}
             <span className="count">{counts[t.id]}</span>
@@ -595,7 +603,6 @@ export function DraftsPane({
               <div className="draft-detail-body scroll-area">
                 {(editing ? editImageUrl : active.imageUrl) && (
                   <div style={{ marginBottom: editing ? 8 : 14, maxWidth: 720 }}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={(editing ? editImageUrl : active.imageUrl) as string}
                       alt="post attachment"
@@ -700,7 +707,6 @@ export function DraftsPane({
                             aspectRatio: "4 / 3",
                           }}
                         >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={c.url}
                             alt={c.source || "search result"}

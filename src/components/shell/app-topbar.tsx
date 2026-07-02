@@ -1,6 +1,4 @@
-"use client";
-
-import { usePathname } from "next/navigation";
+import { useLocation } from "@tanstack/react-router";
 import { ChevronRight, Search } from "lucide-react";
 import { dispatchOpenCmdK } from "@/components/shell/command-palette";
 
@@ -15,7 +13,7 @@ export function AppTopbar({
   pendingDraftsCount: number;
   nextRunRel: string | null;
 }) {
-  const pathname = usePathname();
+  const pathname = useLocation().pathname;
   const segment = "/" + (pathname.split("/")[1] ?? "");
 
   const labelBySegment: Record<string, string> = {

@@ -1,5 +1,5 @@
 import { cache } from "react";
-import { cookies } from "next/headers";
+import { getCookie } from "@tanstack/react-start/server";
 import { auth } from "@/auth";
 import { supabaseAdmin } from "@/lib/supabase/service";
 import { selectProjectWithRelations, unwrap } from "@/lib/supabase/queries";
@@ -139,8 +139,7 @@ export const getCurrentProject = cache(async function getCurrentProject(
 ) {
   const orgId = await ensureOrg(userId);
   const orgIds = await userOrgIds(userId);
-  const c = await cookies();
-  const pid = c.get(COOKIE)?.value;
+  const pid = getCookie(COOKIE);
 
   if (pid) {
     const { data: found } = await selectProjectWithRelations(supabaseAdmin, pid);

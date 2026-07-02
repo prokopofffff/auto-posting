@@ -13,9 +13,16 @@
 # testing
 /coverage
 
-# next.js
+# TanStack Start / Vite build output
 /.next/
 /out/
+/dist/
+/.output/
+/.nitro/
+/.tanstack/
+
+# generated route tree (committed by convention, but ignore if you prefer)
+# src/routeTree.gen.ts
 
 # production
 /build
@@ -40,3 +47,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local Netlify folder
+.netlify

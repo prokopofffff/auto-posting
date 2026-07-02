@@ -1,6 +1,4 @@
-"use server";
-
-import { revalidatePath } from "next/cache";
+import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase/service";
 import { unwrap } from "@/lib/supabase/queries";
@@ -53,76 +51,101 @@ const settingsSchema = z.object({
 
 export type SaveSettingsInput = z.input<typeof settingsSchema>;
 
-export async function saveSettingsAction(input: SaveSettingsInput) {
-  const user = await getCurrentUser();
-  if (!user) return { ok: false as const, error: "Not signed in." };
-
-  const parsed = settingsSchema.safeParse(input);
-  if (!parsed.success) {
-    return { ok: false as const, error: parsed.error.issues[0]?.message ?? "Invalid input." };
-  }
-  const data = parsed.data;
-
-  if (!(await userOwnsProject(user.id, data.projectId))) {
-    return { ok: false as const, error: "Project not found." };
-  }
-
-  // The name update and the settings upsert must land together — a single
-  // plpgsql function runs both in one transaction (see migration
-  // *_save_project_settings_rpc.sql). The settings upsert is keyed on the
-  // unique projectId, so the same payload covers create and update.
-  await unwrap(
-    supabaseAdmin.rpc("save_project_settings", {
-      p_project_id: data.projectId,
-      p_name: data.projectName,
-      p_settings: {
-        topics: data.topics,
-        audience: data.audience?.trim() || null,
-        angle: data.angle?.trim() || null,
-        languages: data.languages,
-        writingStyle: data.writingStyle,
-        customStyle: data.customStyle || null,
-        intervalDays: data.intervalDays,
-        postsPerDay: data.postsPerDay,
-        preferredHour: data.preferredHour,
-        timezone: data.timezone,
-        mode: data.mode,
-        includeHashtags: data.includeHashtags,
-        includeSource: data.includeSource,
-        maxPostChars: data.maxPostChars,
-        bannedWords: data.bannedWords,
-        moderationEnabled: data.moderationEnabled,
-        confidenceThreshold: data.confidenceThreshold,
-        skipDays: data.skipDays,
-        voiceMode: data.voiceMode,
-        voiceOverrides: data.voiceOverrides ?? null,
-      },
-    }),
-  );
-
-  revalidatePath("/settings");
-  revalidatePath("/dashboard");
-  return { ok: true as const };
+// The validator runs on both client and server, so it stays a plain passthrough:
+// we keep the strict `safeParse` inside the handler to preserve the friendly
+// `{ ok, error }` return contract instead of throwing from the validator.
+function saveSettingsValidator(input: SaveSettingsInput): SaveSettingsInput {
+  return input;
 }
 
-export async function toggleProjectStatusAction(projectId: string) {
-  const user = await getCurrentUser();
-  if (!user) return { ok: false as const, error: "Not signed in." };
+// Calling convention from a client component:
+//   const res = await saveSettingsAction({ data: input })
+// After a successful save, the caller does `await router.invalidate()` (the
+// old revalidatePath("/settings") / revalidatePath("/dashboard") lived here).
+export const saveSettingsAction = createServerFn({ method: "POST" })
+  .validator(saveSettingsValidator)
+  .handler(async ({ data: input }) => {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false as const, error: "Not signed in." };
 
-  if (!(await userOwnsProject(user.id, projectId))) {
-    return { ok: false as const, error: "Project not found." };
-  }
-  const { data: project } = await supabaseAdmin
-    .from("Project")
-    .select("status")
-    .eq("id", projectId)
-    .maybeSingle();
-  if (!project) return { ok: false as const, error: "Project not found." };
+    const parsed = settingsSchema.safeParse(input);
+    if (!parsed.success) {
+      return {
+        ok: false as const,
+        error: parsed.error.issues[0]?.message ?? "Invalid input.",
+      };
+    }
+    const data = parsed.data;
 
-  const next = project.status === "ACTIVE" ? "PAUSED" : "ACTIVE";
-  await unwrap(
-    supabaseAdmin.from("Project").update({ status: next }).eq("id", projectId),
-  );
-  revalidatePath("/dashboard");
-  return { ok: true as const, status: next };
+    if (!(await userOwnsProject(user.id, data.projectId))) {
+      return { ok: false as const, error: "Project not found." };
+    }
+
+    // The name update and the settings upsert must land together — a single
+    // plpgsql function runs both in one transaction (see migration
+    // *_save_project_settings_rpc.sql). The settings upsert is keyed on the
+    // unique projectId, so the same payload covers create and update.
+    await unwrap(
+      supabaseAdmin.rpc("save_project_settings", {
+        p_project_id: data.projectId,
+        p_name: data.projectName,
+        p_settings: {
+          topics: data.topics,
+          audience: data.audience?.trim() || null,
+          angle: data.angle?.trim() || null,
+          languages: data.languages,
+          writingStyle: data.writingStyle,
+          customStyle: data.customStyle || null,
+          intervalDays: data.intervalDays,
+          postsPerDay: data.postsPerDay,
+          preferredHour: data.preferredHour,
+          timezone: data.timezone,
+          mode: data.mode,
+          includeHashtags: data.includeHashtags,
+          includeSource: data.includeSource,
+          maxPostChars: data.maxPostChars,
+          bannedWords: data.bannedWords,
+          moderationEnabled: data.moderationEnabled,
+          confidenceThreshold: data.confidenceThreshold,
+          skipDays: data.skipDays,
+          voiceMode: data.voiceMode,
+          voiceOverrides: data.voiceOverrides ?? null,
+        },
+      }),
+    );
+
+    return { ok: true as const };
+  });
+
+// Validator runs on both client and server; keep it a plain string coercion.
+function projectIdValidator(projectId: unknown): string {
+  if (typeof projectId !== "string") throw new Error("Expected a project id");
+  return projectId;
 }
+
+// Calling convention from a client component:
+//   const res = await toggleProjectStatusAction({ data: projectId })
+// After a successful toggle, the caller does `await router.invalidate()` (the
+// old revalidatePath("/dashboard") lived here).
+export const toggleProjectStatusAction = createServerFn({ method: "POST" })
+  .validator(projectIdValidator)
+  .handler(async ({ data: projectId }) => {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false as const, error: "Not signed in." };
+
+    if (!(await userOwnsProject(user.id, projectId))) {
+      return { ok: false as const, error: "Project not found." };
+    }
+    const { data: project } = await supabaseAdmin
+      .from("Project")
+      .select("status")
+      .eq("id", projectId)
+      .maybeSingle();
+    if (!project) return { ok: false as const, error: "Project not found." };
+
+    const next = project.status === "ACTIVE" ? "PAUSED" : "ACTIVE";
+    await unwrap(
+      supabaseAdmin.from("Project").update({ status: next }).eq("id", projectId),
+    );
+    return { ok: true as const, status: next };
+  });
