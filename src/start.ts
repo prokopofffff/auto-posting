@@ -21,6 +21,15 @@ function isPublic(pathname: string): boolean {
   );
 }
 
+// TanStack Start routes server-function calls through this base (POST to
+// /_serverFn/<id>). The guard MUST NOT redirect these: sign-in/sign-up/Google
+// OAuth are themselves server functions a signed-out user has to reach, and a
+// redirect response would replace their result and make auth impossible. The
+// session refresh above still runs for these requests; auth for protected
+// functions is enforced inside each one (getCurrentUser + userOwnsProject) and
+// inside protected loaders (requireCurrentProject redirects when signed out).
+const SERVER_FN_BASE = "/_serverFn/";
+
 // Global request middleware — the TanStack Start replacement for src/proxy.ts +
 // src/lib/supabase/middleware.ts. Runs on EVERY request (page renders AND server
 // function calls). It:
@@ -60,7 +69,11 @@ const authGuard = createMiddleware({ type: "request" }).server(
 
     const url = new URL(request.url);
 
-    if (!user && !isPublic(pathname)) {
+    if (
+      !user &&
+      !isPublic(pathname) &&
+      !pathname.startsWith(SERVER_FN_BASE)
+    ) {
       throw redirect({
         to: "/sign-in",
         search: { from: url.pathname },

@@ -8,8 +8,8 @@
 // Server-only: reads CRON_SECRET; never import from a Client Component.
 
 function functionsBase(): string {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!url) throw new Error("NEXT_PUBLIC_SUPABASE_URL is not set");
+  const url = process.env.VITE_SUPABASE_URL;
+  if (!url) throw new Error("VITE_SUPABASE_URL is not set");
   // Supabase Edge Functions are served at <project>.supabase.co/functions/v1/<name>.
   return `${url.replace(/\/$/, "")}/functions/v1`;
 }
