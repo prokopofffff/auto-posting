@@ -146,6 +146,48 @@ export type GenerationResult = {
   imageQuery: string | null;
 };
 
+// The prompt asks the model to add hashtags and the source URL, but models
+// don't reliably comply — hashtags come and go, and the URL is often dropped
+// entirely. So we enforce both deterministically after generation: keep what
+// the model produced when it's there, and fill in the rest ourselves.
+
+/** True if the text already contains at least one "#word" hashtag. */
+function hasHashtags(text: string): boolean {
+  return /(^|\s)#[\p{L}\p{N}_]+/u.test(text);
+}
+
+/** A configured topic turned into a hashtag ("AI in fintech" → "#aiinfintech"),
+ *  or "" if it doesn't reduce to a sensibly short tag. */
+function topicToHashtag(topic: string): string {
+  const slug = topic.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  return slug && slug.length <= 30 ? `#${slug}` : "";
+}
+
+/**
+ * Guarantee a post honors its includeHashtags / includeSource settings.
+ * Only ever appends — never rewrites the model's copy — and skips anything
+ * already present, so an obedient model doesn't get duplicate tags or a
+ * repeated URL. Hashtags come from the configured topics as a fallback.
+ */
+function enforcePostRules(
+  content: string,
+  v: Pick<VoiceCfg, "includeHashtags" | "includeSource">,
+  opts: { url?: string | null; topics: string[] },
+): string {
+  let out = content.trim();
+
+  if (v.includeHashtags && !hasHashtags(out)) {
+    const tags = opts.topics.map(topicToHashtag).filter(Boolean).slice(0, 5);
+    if (tags.length > 0) out = `${out}\n\n${tags.join(" ")}`;
+  }
+
+  if (v.includeSource && opts.url && !out.includes(opts.url)) {
+    out = `${out}\n\n${opts.url}`;
+  }
+
+  return out;
+}
+
 function voiceBlock(v: VoiceCfg, header: string): string {
   const styleBody =
     v.writingStyle === "custom"
@@ -297,15 +339,33 @@ export async function generatePost(
   }
   const cleaned = parsed.posts
     .filter((p) => p.language && p.content)
-    .map((p) => ({
-      platform:
+    .map((p) => {
+      const platform =
         p.platform === "LINKEDIN" || p.platform === "TELEGRAM"
           ? (p.platform as Platform)
-          : undefined,
-      language: p.language,
-      content: p.content.trim(),
-      confidence: typeof p.confidence === "number" ? p.confidence : null,
-    }));
+          : undefined;
+      // Pick the voice config that governed this post so we enforce ITS
+      // hashtag/source settings: the single voice in unified mode, or the
+      // per-platform block in per-platform mode.
+      const v =
+        input.voiceMode === "UNIFIED"
+          ? (input.voice as VoiceCfg)
+          : platform
+          ? (input.voice as Partial<Record<Platform, VoiceCfg>>)[platform]
+          : undefined;
+      const content = v
+        ? enforcePostRules(p.content.trim(), v, {
+            url: article.url,
+            topics: input.topics,
+          })
+        : p.content.trim();
+      return {
+        platform,
+        language: p.language,
+        content,
+        confidence: typeof p.confidence === "number" ? p.confidence : null,
+      };
+    });
   if (cleaned.length === 0) throw new Error("Model returned no usable posts.");
 
   const confidences = cleaned
@@ -528,7 +588,10 @@ export async function generateAdHocPost(
   const parsed = extractJson(text) as { content?: string };
   if (!parsed.content) throw new Error("Model response missing 'content'.");
   return {
-    content: parsed.content.trim(),
+    content: enforcePostRules(parsed.content.trim(), input, {
+      url: input.sourceUrl,
+      topics: [input.topic],
+    }),
     tokensInput,
     tokensOutput,
     costUsd: computeCostUsd(tokensInput, tokensOutput),
