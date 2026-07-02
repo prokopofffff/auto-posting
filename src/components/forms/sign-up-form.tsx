@@ -1,12 +1,11 @@
-"use client";
-
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { signUpAction } from "@/server/auth-actions";
 import { signInWithGoogle } from "@/server/oauth-actions";
 
 export function SignUpForm() {
+  const navigate = useNavigate();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -14,20 +13,24 @@ export function SignUpForm() {
   return (
     <div>
       <form
-        action={(fd: FormData) =>
+        onSubmit={(e) => {
+          e.preventDefault();
+          const fd = new FormData(e.currentTarget);
           startTransition(async () => {
             setError(null);
-            const res = await signUpAction(fd);
+            // Server-fn calling convention: pass the FormData under `data`.
+            const res = await signUpAction({ data: fd });
             if (!res.ok) {
               setError(res.error);
               toast.error(res.error);
               return;
             }
             toast.success("Welcome!");
-            router.push("/dashboard");
-            router.refresh();
-          })
-        }
+            // Refresh loader/auth data (replaces router.refresh()), then navigate.
+            await router.invalidate();
+            await navigate({ to: "/dashboard" });
+          });
+        }}
       >
         <div className="field">
           <label className="field-label" htmlFor="name">
@@ -70,7 +73,14 @@ export function SignUpForm() {
 
       <div className="auth-divider">or</div>
 
-      <form action={signInWithGoogle}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          // signInWithGoogle throws a redirect on the server; the browser follows
+          // it. No client navigation needed.
+          void signInWithGoogle();
+        }}
+      >
         <button className="btn block" type="submit">
           Continue with Google
         </button>

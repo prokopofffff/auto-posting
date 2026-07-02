@@ -1,5 +1,3 @@
-"use client"
-
 import {
   CircleCheckIcon,
   InfoIcon,
@@ -7,15 +5,36 @@ import {
   OctagonXIcon,
   TriangleAlertIcon,
 } from "lucide-react"
-import { useTheme } from "next-themes"
+import { useEffect, useState } from "react"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 
+// Theme is driven by the `data-theme` attribute on <html> (set by the inline
+// bootstrap script in __root.tsx from localStorage), so there is no next-themes
+// provider. We read it from document.documentElement.dataset.theme after mount;
+// "dark" is the SSR/initial default (matches <html data-theme="dark"> in
+// __root.tsx). Sonner otherwise follows the CSS variables below.
+type SonnerTheme = ToasterProps["theme"]
+
 const Toaster = ({ ...props }: ToasterProps) => {
-  const { theme = "system" } = useTheme()
+  const [theme, setTheme] = useState<SonnerTheme>("dark")
+
+  useEffect(() => {
+    const read = () => {
+      const t = document.documentElement.dataset.theme
+      setTheme(t === "light" || t === "dark" ? t : "dark")
+    }
+    read()
+    const observer = new MutationObserver(read)
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    })
+    return () => observer.disconnect()
+  }, [])
 
   return (
     <Sonner
-      theme={theme as ToasterProps["theme"]}
+      theme={theme}
       className="toaster group"
       icons={{
         success: <CircleCheckIcon className="size-4" />,

@@ -1,7 +1,5 @@
-"use client";
-
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
   BarChart3,
@@ -52,6 +50,7 @@ export function CommandPalette({
   projectStatus: "ACTIVE" | "PAUSED";
 }) {
   const router = useRouter();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [idx, setIdx] = useState(0);
@@ -61,28 +60,28 @@ export function CommandPalette({
   const close = useCallback(() => setOpen(false), []);
 
   const groups: CmdGroup[] = useMemo(() => {
-    const go = (href: string) => () => {
-      router.push(href);
+    const go = (to: string) => () => {
+      void navigate({ to });
       close();
     };
 
     const runNow = () => {
       startTransition(async () => {
-        const res = await runNowAction(projectId);
+        const res = await runNowAction({ data: projectId });
         if (!res.ok) toast.error(res.error);
         else if ("skipped" in res && res.skipped) toast.info(res.reason ?? "Nothing to do.");
         else toast.success(res.published ? "Posted!" : "Draft created.");
-        router.refresh();
+        await router.invalidate();
       });
       close();
     };
 
     const toggleStatus = () => {
       startTransition(async () => {
-        const res = await toggleProjectStatusAction(projectId);
+        const res = await toggleProjectStatusAction({ data: projectId });
         if (!res.ok) toast.error(res.error);
         else toast.success(res.status === "ACTIVE" ? "Agent started" : "Agent paused");
-        router.refresh();
+        await router.invalidate();
       });
       close();
     };
@@ -113,12 +112,12 @@ export function CommandPalette({
             run: toggleStatus,
           },
           { id: "act-new-topic", label: "Add a new topic",          icon: <Plus className="ico" size={14} />,   kbd: "n t", run: go("/topics") },
-          { id: "act-import",    label: "Bulk import topics (CSV)", icon: <Upload className="ico" size={14} />, kbd: "i",   run: go("/topics?import=1") },
-          { id: "act-refresh",   label: "Refresh current view",     icon: <RefreshCw className="ico" size={14} />, kbd: "r", run: () => { router.refresh(); close(); } },
+          { id: "act-import",    label: "Bulk import topics (CSV)", icon: <Upload className="ico" size={14} />, kbd: "i",   run: () => { void navigate({ to: "/topics", search: { import: "1" } }); close(); } },
+          { id: "act-refresh",   label: "Refresh current view",     icon: <RefreshCw className="ico" size={14} />, kbd: "r", run: () => { void router.invalidate(); close(); } },
         ],
       },
     ];
-  }, [router, projectId, projectStatus, close]);
+  }, [router, navigate, projectId, projectStatus, close]);
 
   // Open via ⌘K / Ctrl-K or window event
   useEffect(() => {
@@ -262,7 +261,7 @@ export function CommandPalette({
 
 /** Global `g d`/`g c`/… navigation. Activates a 1.2s window after pressing `g` (unless typing). */
 export function GlobalShortcuts() {
-  const router = useRouter();
+  const navigate = useNavigate();
   useEffect(() => {
     const map: Record<string, string> = {
       d: "/dashboard",
@@ -288,10 +287,10 @@ export function GlobalShortcuts() {
         }
         return;
       }
-      const href = map[e.key.toLowerCase()];
-      if (href) {
+      const to = map[e.key.toLowerCase()];
+      if (to) {
         e.preventDefault();
-        router.push(href);
+        void navigate({ to });
       }
       pending = false;
       if (timer) clearTimeout(timer);
@@ -301,6 +300,6 @@ export function GlobalShortcuts() {
       window.removeEventListener("keydown", onKey);
       if (timer) clearTimeout(timer);
     };
-  }, [router]);
+  }, [navigate]);
   return null;
 }

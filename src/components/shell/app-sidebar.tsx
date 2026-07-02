@@ -1,8 +1,5 @@
-"use client";
-
 import { useTransition } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { Link, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
   BarChart3,
@@ -20,7 +17,7 @@ import { signOutAction } from "@/server/oauth-actions";
 import { dispatchOpenCmdK } from "@/components/shell/command-palette";
 
 type NavItem = {
-  href: string;
+  href: "/dashboard" | "/compose" | "/topics" | "/drafts" | "/analytics" | "/settings";
   id: "dashboard" | "compose" | "topics" | "drafts" | "analytics" | "settings";
   label: string;
   kbd: string;
@@ -57,8 +54,9 @@ export function AppSidebar({
   userInitials: string;
   badges?: SidebarBadges;
 }) {
-  const pathname = usePathname();
+  const pathname = useLocation({ select: (l) => l.pathname });
   const router = useRouter();
+  const navigate = useNavigate();
   const [pending, startTransition] = useTransition();
 
   function isActive(href: string) {
@@ -68,12 +66,20 @@ export function AppSidebar({
   function switchTo(id: string) {
     if (id === currentProjectId || pending) return;
     startTransition(async () => {
-      const res = await switchProjectAction(id);
+      const res = await switchProjectAction({ data: id });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
-      router.refresh();
+      await router.invalidate();
+    });
+  }
+
+  function signOut() {
+    if (pending) return;
+    startTransition(async () => {
+      await signOutAction();
+      await navigate({ to: "/" });
     });
   }
 
@@ -93,7 +99,7 @@ export function AppSidebar({
           return (
             <Link
               key={it.id}
-              href={it.href}
+              to={it.href}
               className={"sb-item" + (isActive(it.href) ? " active" : "")}
             >
               <Icon className="ico" size={14} />
@@ -164,7 +170,13 @@ export function AppSidebar({
         <div className="sb-user">
           <div className="avatar">{userInitials}</div>
           <div className="email">{userEmail}</div>
-          <form action={signOutAction} style={{ marginLeft: "auto", lineHeight: 0 }}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              signOut();
+            }}
+            style={{ marginLeft: "auto", lineHeight: 0 }}
+          >
             <button
               type="submit"
               title="Sign out"

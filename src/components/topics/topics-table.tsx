@@ -1,8 +1,6 @@
-"use client";
-
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@tanstack/react-router";
 import {
   Clock,
   Download,
@@ -159,13 +157,13 @@ export function TopicsTable({
     const v = newName.trim();
     if (!v) return;
     startTransition(async () => {
-      const res = await addTopicAction(projectId, v);
+      const res = await addTopicAction({ data: { projectId, name: v } });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
       setNewName("");
-      router.refresh();
+      await router.invalidate();
     });
   }
 
@@ -173,14 +171,14 @@ export function TopicsTable({
     const names = Array.from(sel);
     if (names.length === 0) return;
     startTransition(async () => {
-      const res = await removeTopicsAction(projectId, names);
+      const res = await removeTopicsAction({ data: { projectId, names } });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
       toast.success(`Removed ${res.removed} topic${res.removed === 1 ? "" : "s"}.`);
       setSel(new Set());
-      router.refresh();
+      await router.invalidate();
     });
   }
 
@@ -188,7 +186,7 @@ export function TopicsTable({
     if (names.length === 0 || genPending) return;
     setGenName(label);
     startGen(async () => {
-      const res = await generateForTopicsAction(projectId, names);
+      const res = await generateForTopicsAction({ data: { projectId, topics: names } });
       setGenName(null);
       if (!res.ok) {
         toast.error(res.error);
@@ -202,20 +200,20 @@ export function TopicsTable({
         res.published ? "Generated and published a post." : "Draft generated — review it in Drafts.",
       );
       setSel(new Set());
-      router.refresh();
+      await router.invalidate();
     });
   }
 
   function runImport(raw: string) {
     startTransition(async () => {
-      const res = await bulkImportTopicsAction(projectId, raw);
+      const res = await bulkImportTopicsAction({ data: { projectId, raw } });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
       toast.success(`Imported ${res.added} topic${res.added === 1 ? "" : "s"}.`);
       setImportOpen(false);
-      router.refresh();
+      await router.invalidate();
     });
   }
 
@@ -409,9 +407,9 @@ export function TopicsTable({
                         className="btn icon xs ghost danger"
                         onClick={() => {
                           startTransition(async () => {
-                            const res = await removeTopicsAction(projectId, [r.name]);
+                            const res = await removeTopicsAction({ data: { projectId, names: [r.name] } });
                             if (!res.ok) toast.error(res.error);
-                            else router.refresh();
+                            else await router.invalidate();
                           });
                         }}
                         aria-label={`Remove ${r.name}`}

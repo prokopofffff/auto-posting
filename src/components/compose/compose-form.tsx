@@ -1,8 +1,5 @@
-"use client";
-
 import { useState, useTransition } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
   Check,
@@ -69,11 +66,13 @@ function AiDraftModal({
     if (!topic.trim()) return;
     setGenerating(true);
     const res = await aiComposeDraftAction({
-      projectId,
-      topic: topic.trim(),
-      sourceUrl: sourceUrl.trim() || undefined,
-      tone,
-      language,
+      data: {
+        projectId,
+        topic: topic.trim(),
+        sourceUrl: sourceUrl.trim() || undefined,
+        tone,
+        language,
+      },
     });
     setGenerating(false);
     if (!res.ok) {
@@ -261,6 +260,7 @@ export function ComposeForm({
   languages: string[];
 }) {
   const router = useRouter();
+  const navigate = useNavigate();
   const [pending, startTransition] = useTransition();
   const [body, setBody] = useState("");
   const [topic, setTopic] = useState("");
@@ -309,32 +309,31 @@ export function ComposeForm({
       imageUrl: imageUrl || undefined,
     };
     startTransition(async () => {
-      const res = await composeSubmitAction(
-        scheduleMode === "now"
-          ? { ...base, mode: "now" }
-          : scheduleMode === "schedule"
-          ? {
-              ...base,
-              mode: "schedule",
-              scheduledAt: new Date(scheduleAt).toISOString(),
-            }
-          : { ...base, mode: "draft" },
-      );
+      const res = await composeSubmitAction({
+        data:
+          scheduleMode === "now"
+            ? { ...base, mode: "now" }
+            : scheduleMode === "schedule"
+            ? {
+                ...base,
+                mode: "schedule",
+                scheduledAt: new Date(scheduleAt).toISOString(),
+              }
+            : { ...base, mode: "draft" },
+      });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
       if (res.mode === "now") {
         toast.success(`Posted to ${selectedPlatforms.length} channel${selectedPlatforms.length === 1 ? "" : "s"}.`);
-        router.push("/drafts");
       } else if (res.mode === "schedule") {
         toast.success("Scheduled.");
-        router.push("/drafts");
       } else {
         toast.success("Saved to drafts.");
-        router.push("/drafts");
       }
-      router.refresh();
+      await router.invalidate();
+      await navigate({ to: "/drafts" });
     });
   }
 
@@ -344,7 +343,7 @@ export function ComposeForm({
     const fd = new FormData();
     fd.set("projectId", projectId);
     fd.set("file", file);
-    uploadComposeImageAction(fd)
+    uploadComposeImageAction({ data: fd })
       .then((res) => {
         if (!res.ok) toast.error(res.error);
         else setImageUrl(res.url);
@@ -559,7 +558,6 @@ export function ComposeForm({
           >
             {imageUrl ? (
               <>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={imageUrl}
                   alt="attachment preview"
@@ -634,7 +632,7 @@ export function ComposeForm({
               {channels.length === 0 ? (
                 <div className="muted" style={{ fontSize: 12, padding: "4px 0" }}>
                   No channels connected yet.{" "}
-                  <Link href="/settings" style={{ color: "var(--accent)" }}>
+                  <Link to="/settings" style={{ color: "var(--accent)" }}>
                     Connect one →
                   </Link>
                 </div>
@@ -649,7 +647,7 @@ export function ComposeForm({
                 ))
               )}
               <Link
-                href="/settings"
+                to="/settings"
                 className="btn ghost xs"
                 style={{ marginTop: 4, justifyContent: "flex-start" }}
               >

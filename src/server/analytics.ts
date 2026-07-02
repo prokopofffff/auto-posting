@@ -1,5 +1,8 @@
+import { createServerFn } from "@tanstack/react-start";
+import { redirect } from "@tanstack/react-router";
 import { supabaseAdmin } from "@/lib/supabase/service";
 import { count, unwrap, withDates } from "@/lib/supabase/queries";
+import { getCurrentUser, getCurrentProject } from "@/server/project";
 
 export type AnalyticsSummary = {
   totalPublished: number;
@@ -187,3 +190,16 @@ export async function getAnalytics(projectId: string): Promise<AnalyticsSummary>
     spendPerPostUsd,
   };
 }
+
+// Loader data for the analytics page (ported from src/app/(app)/analytics/page.tsx).
+// A server fn so the service-role queries above stay off the client bundle; the
+// route loader calls it via the RPC bridge. method: "POST" because it resolves
+// the current project from the session cookie.
+export const getAnalyticsData = createServerFn({ method: "POST" }).handler(
+  async (): Promise<{ a: AnalyticsSummary }> => {
+    const user = await getCurrentUser();
+    if (!user) throw redirect({ to: "/sign-in" });
+    const project = await getCurrentProject(user.id);
+    return { a: await getAnalytics(project.id) };
+  },
+);

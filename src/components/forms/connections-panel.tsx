@@ -1,7 +1,5 @@
-"use client";
-
 import { useEffect, useState, useTransition } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useNavigate, getRouteApi } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Share2, Send, Trash2 } from "lucide-react";
 import {
@@ -11,6 +9,11 @@ import {
 import { daysUntil } from "@/lib/format";
 
 const CARD_TITLE_STYLE = { display: "flex", alignItems: "center", gap: 6 } as const;
+
+// ConnectionsPanel renders only inside the /settings route, which validates the
+// `?li_ok` / `?li_error` params set by the LinkedIn OAuth callback. Reading them
+// through the route api keeps them typed (replacing next's useSearchParams()).
+const settingsRoute = getRouteApi("/(app)/settings");
 
 export type ConnectedRow = {
   id: string;
@@ -28,7 +31,8 @@ export function ConnectionsPanel({
   connections: ConnectedRow[];
 }) {
   const router = useRouter();
-  const search = useSearchParams();
+  const navigate = useNavigate();
+  const search = settingsRoute.useSearch();
   const [pending, startTransition] = useTransition();
   const [botToken, setBotToken] = useState("");
   const [chatId, setChatId] = useState("");
@@ -37,20 +41,17 @@ export function ConnectionsPanel({
   const [now] = useState(() => Date.now());
 
   useEffect(() => {
-    if (search.get("li_ok")) {
-      toast.success("LinkedIn connected.");
-      const url = new URL(window.location.href);
-      url.searchParams.delete("li_ok");
-      window.history.replaceState({}, "", url.toString());
-    }
-    const err = search.get("li_error");
-    if (err) {
-      toast.error(`LinkedIn: ${err}`);
-      const url = new URL(window.location.href);
-      url.searchParams.delete("li_error");
-      window.history.replaceState({}, "", url.toString());
-    }
-  }, [search]);
+    if (!search.li_ok && !search.li_error) return;
+    if (search.li_ok) toast.success("LinkedIn connected.");
+    if (search.li_error) toast.error(`LinkedIn: ${search.li_error}`);
+    // Strip the one-shot params so a reload/back doesn't re-toast, mirroring the
+    // old history.replaceState(). `replace: true` keeps it out of the history.
+    void navigate({
+      to: "/settings",
+      search: { li_ok: undefined, li_error: undefined },
+      replace: true,
+    });
+  }, [search.li_ok, search.li_error, navigate]);
 
   function connectTelegram() {
     if (!botToken || !chatId) {
@@ -58,7 +59,7 @@ export function ConnectionsPanel({
       return;
     }
     startTransition(async () => {
-      const res = await connectTelegramAction({ projectId, botToken, chatId });
+      const res = await connectTelegramAction({ data: { projectId, botToken, chatId } });
       if (!res.ok) {
         toast.error(res.error);
         return;
@@ -66,19 +67,19 @@ export function ConnectionsPanel({
       toast.success(`Connected ${res.botUsername ? `@${res.botUsername}` : "bot"}`);
       setBotToken("");
       setChatId("");
-      router.refresh();
+      await router.invalidate();
     });
   }
 
   function disconnect(id: string) {
     startTransition(async () => {
-      const res = await disconnectAccountAction(id);
+      const res = await disconnectAccountAction({ data: id });
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
       toast.success("Disconnected");
-      router.refresh();
+      await router.invalidate();
     });
   }
 

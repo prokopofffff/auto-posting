@@ -1,7 +1,5 @@
-"use client";
-
 import { useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Pause, Play, Zap } from "lucide-react";
 import { toggleProjectStatusAction } from "@/server/settings-actions";
@@ -25,13 +23,13 @@ export function PauseToggleBtn({
       disabled={pending}
       onClick={() =>
         startTransition(async () => {
-          const res = await toggleProjectStatusAction(projectId);
+          const res = await toggleProjectStatusAction({ data: projectId });
           if (!res.ok) {
             toast.error(res.error);
             return;
           }
           toast.success(res.status === "ACTIVE" ? "Agent started" : "Agent paused");
-          router.refresh();
+          await router.invalidate();
         })
       }
     >
@@ -43,6 +41,7 @@ export function PauseToggleBtn({
 
 export function GenerateNowBtn({ projectId }: { projectId: string }) {
   const router = useRouter();
+  const navigate = useNavigate();
   const [pending, startTransition] = useTransition();
 
   return (
@@ -52,7 +51,7 @@ export function GenerateNowBtn({ projectId }: { projectId: string }) {
       disabled={pending}
       onClick={() =>
         startTransition(async () => {
-          const res = await runNowAction(projectId);
+          const res = await runNowAction({ data: projectId });
           if (!res.ok) {
             toast.error(res.error);
             return;
@@ -62,8 +61,8 @@ export function GenerateNowBtn({ projectId }: { projectId: string }) {
             return;
           }
           toast.success(res.published ? "Posted!" : "Draft created — review in Drafts.");
-          router.push("/drafts");
-          router.refresh();
+          await router.invalidate();
+          await navigate({ to: "/drafts" });
         })
       }
     >
