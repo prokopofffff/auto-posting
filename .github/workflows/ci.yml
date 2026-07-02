@@ -36,12 +36,11 @@ jobs:
       - name: Build
         run: pnpm build
         env:
-          NEXT_TELEMETRY_DISABLED: "1"
           # The build is env-independent — the Supabase service client is lazy —
-          # so these are harmless placeholders that just keep any client-bundle
-          # reads of the public vars deterministic.
-          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+          # so these are harmless placeholders that just keep the client-bundle
+          # reads of the public vars (import.meta.env) deterministic.
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_ANON_KEY: placeholder-anon-key
 
   # Apply DB migrations and (re)deploy the `tick` Edge Function on every push to
   # main, but only after the build passes. PRs never deploy: the job is gated on
