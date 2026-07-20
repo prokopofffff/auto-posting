@@ -36,17 +36,20 @@ type SerpImage = { original_image?: string; link?: string; title?: string };
 /**
  * Search Google Images for `query` via Bright Data and return up to `limit`
  * candidates (full-resolution image URLs + their source). Empty array when
- * credentials are unset, the query is blank, or the request fails. Bright Data
- * rejects Google's `num` parameter for image search, so the upstream page is
- * always full-size; we cap the result here with `limit` (default 10) — that's
- * what controls how many the editor loads.
+ * credentials are unset, the query is blank, or the request fails.
+ *
+ * We use Google's modern image-search param `udm=2`. The legacy `tbm=isch`
+ * page no longer renders the layout Bright Data waits for, so it stalls ~90s
+ * and returns a 502 — which is what caused text-only posts and the "Find
+ * images" gateway timeouts. `num` isn't accepted for image search, so the
+ * upstream page is always full-size; we cap the results here with `limit`.
  */
 export async function searchImages(query: string, limit = 10): Promise<ImageCandidate[]> {
   const token = Deno.env.get("BRIGHTDATA_API_TOKEN")?.trim();
   const q = query.trim();
   if (!token || !q) return [];
   const zone = Deno.env.get("BRIGHTDATA_SERP_ZONE")?.trim() || DEFAULT_ZONE;
-  const target = `https://www.google.com/search?q=${encodeURIComponent(q)}&tbm=isch`;
+  const target = `https://www.google.com/search?q=${encodeURIComponent(q)}&udm=2`;
   try {
     const res = await fetch(ENDPOINT, {
       method: "POST",
