@@ -32,7 +32,13 @@ export type User = Tables<"User">;
 
 /**
  * One Google Images result returned by the image search (Bright Data) — the
- * full-resolution image plus where it came from. Kept in sync with the edge
+ * full-resolution image, Google's own hotlink-safe thumbnail (for preview and
+ * as a re-host fallback), plus where it came from. Kept in sync with the edge
  * function's `ImageCandidate` (supabase/functions/tick/lib/image-search.ts).
  */
-export type ImageCandidate = { url: string; sourcePage: string; source: string };
+export type ImageCandidate = {
+  url: string;
+  thumbnail?: string;
+  sourcePage: string;
+  source: string;
+};

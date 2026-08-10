@@ -129,35 +129,63 @@ export const searchDraftImagesAction = createServerFn({ method: "POST" })
     });
   });
 
+// A desktop-Chrome UA + a Referer make the download look like an in-page image
+// load, which defeats most hotlink protection. Without them many publishers
+// return a 200-OK "no permission to serve this content" placeholder image
+// instead of the real photo (which then gets re-hosted as the post pic).
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
+/** Download an image URL (or data: URI) into a File, or null on any failure. */
+async function downloadImageFile(srcUrl: string, referer?: string): Promise<File | null> {
+  try {
+    const headers: Record<string, string> | undefined = srcUrl.startsWith("data:")
+      ? undefined
+      : {
+          "user-agent": BROWSER_UA,
+          accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+          // A referer from the article's own site is what a real page load sends;
+          // fall back to the image's own origin when we have no source page.
+          referer: referer || srcUrl,
+        };
+    const res = await fetch(srcUrl, { headers, redirect: "follow", signal: AbortSignal.timeout(20_000) });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (blob.size === 0) return null;
+    // Some hosts send "image/jpg" or no type; normalize so the uploader accepts
+    // it, inferring jpeg as a last resort (the uploader re-validates the type).
+    const raw = (res.headers.get("content-type") || blob.type || "").split(";")[0].trim().toLowerCase();
+    const type = raw === "image/jpg" || raw === "" ? "image/jpeg" : raw;
+    return new File([blob], "search-image", { type });
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Download a chosen search result and re-host it in our `post-images` bucket,
  * returning the stable public URL. Search results are arbitrary external image
  * URLs that often block hotlinking, so we always re-host the one the user picks
- * rather than linking it directly. Returns the URL without attaching it — the
- * editor stages it and saves on confirmation.
+ * rather than linking it directly. We fetch the full-resolution original with a
+ * browser UA + Referer (defeats most hotlink protection), then fall back to
+ * Google's own thumbnail (never hotlink-protected) if the original won't
+ * download. Returns the URL without attaching it — the editor stages it and
+ * saves on confirmation.
  */
 // Calling convention:
-//   await rehostDraftImageAction({ data: { draftId, srcUrl } })
+//   await rehostDraftImageAction({ data: { draftId, srcUrl, sourcePage?, thumbnailUrl? } })
 export const rehostDraftImageAction = createServerFn({ method: "POST" })
-  .validator((input: { draftId: string; srcUrl: string }) => input)
-  .handler(async ({ data: { draftId, srcUrl } }) => {
+  .validator(
+    (input: { draftId: string; srcUrl: string; sourcePage?: string; thumbnailUrl?: string }) => input,
+  )
+  .handler(async ({ data: { draftId, srcUrl, sourcePage, thumbnailUrl } }) => {
     const owned = await assertDraftOwnership(draftId);
     if (!owned.ok) return owned;
-    let file: File;
-    try {
-      const res = await fetch(srcUrl, { signal: AbortSignal.timeout(20_000) });
-      if (!res.ok) {
-        return { ok: false as const, error: "Couldn't download that image." };
-      }
-      const blob = await res.blob();
-      // Some hosts send "image/jpg" or no type; normalize so the uploader accepts
-      // it, inferring jpeg as a last resort (the uploader re-validates the type).
-      const raw = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-      const type = raw === "image/jpg" || raw === "" ? "image/jpeg" : raw;
-      file = new File([blob], "search-image", { type });
-    } catch {
-      return { ok: false as const, error: "Couldn't download that image." };
-    }
+    const file =
+      (await downloadImageFile(srcUrl, sourcePage)) ??
+      (thumbnailUrl ? await downloadImageFile(thumbnailUrl, sourcePage) : null);
+    if (!file) return { ok: false as const, error: "Couldn't download that image." };
     return uploadProjectImage(owned.draft.projectId, file);
   });
 

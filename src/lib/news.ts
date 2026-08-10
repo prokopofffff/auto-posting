@@ -5,6 +5,7 @@ import { GLOBAL_FALLBACK_FEEDS, TOPIC_FEEDS } from "@/lib/news-feeds";
 import { fetchNewsApi, isNewsApiConfigured } from "@/lib/newsapi";
 import { buildFactCheck, keywords } from "@/lib/fact-check";
 import { domainOf, isHighTrust } from "@/lib/source-trust";
+import { decodeEntities } from "@/lib/html-entities";
 import type { NewsItem, VerifiedArticle } from "@/lib/news-types";
 
 export type { NewsItem, VerifiedArticle } from "@/lib/news-types";
@@ -86,20 +87,20 @@ type RawItem = Parser.Item & { sourceTag?: GoogleSource };
 
 function toNewsItem(item: RawItem, fallbackSource: string): NewsItem {
   return {
-    title: item.title?.trim() ?? "",
+    title: decodeEntities(item.title ?? ""),
     url: item.link?.trim() ?? "",
-    summary: (item.contentSnippet ?? item.content ?? item.summary ?? "").trim().slice(0, 2000),
+    summary: decodeEntities(item.contentSnippet ?? item.content ?? item.summary ?? "").slice(0, 2000),
     source: fallbackSource,
     publishedAt: item.isoDate ? new Date(item.isoDate) : null,
   };
 }
 
 function toGoogleNewsItem(item: RawItem, fallbackSource: string): NewsItem {
-  const g = parseGoogleItem(item.title?.trim() ?? "", item.sourceTag);
+  const g = parseGoogleItem(decodeEntities(item.title ?? ""), item.sourceTag);
   return {
     title: g.title,
     url: item.link?.trim() ?? "",
-    summary: (item.contentSnippet ?? item.content ?? "").trim().slice(0, 2000),
+    summary: decodeEntities(item.contentSnippet ?? item.content ?? "").slice(0, 2000),
     source: g.publisher ?? fallbackSource,
     publishedAt: item.isoDate ? new Date(item.isoDate) : null,
     sourceDomain: g.domain ?? undefined,
