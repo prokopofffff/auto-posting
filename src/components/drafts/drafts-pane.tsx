@@ -256,10 +256,17 @@ export function DraftsPane({
   // Re-host the picked search result into our bucket and stage it (saved on
   // Save, like an upload). Re-hosting because raw result URLs often block
   // hotlinking; if this one fails to download, the user can pick another.
-  function chooseCandidate(url: string) {
+  function chooseCandidate(c: ImageCandidate) {
     if (!active || choosingUrl) return;
-    setChoosingUrl(url);
-    rehostDraftImageAction({ data: { draftId: active.id, srcUrl: url } })
+    setChoosingUrl(c.url);
+    rehostDraftImageAction({
+      data: {
+        draftId: active.id,
+        srcUrl: c.url,
+        sourcePage: c.sourcePage,
+        thumbnailUrl: c.thumbnail,
+      },
+    })
       .then((res) => {
         if (!res.ok) {
           toast.error(res.error);
@@ -693,7 +700,7 @@ export function DraftsPane({
                         <button
                           key={c.url}
                           type="button"
-                          onClick={() => chooseCandidate(c.url)}
+                          onClick={() => chooseCandidate(c)}
                           disabled={!!choosingUrl}
                           title={c.source || "Use this image"}
                           style={{
@@ -708,7 +715,10 @@ export function DraftsPane({
                           }}
                         >
                           <img
-                            src={c.url}
+                            // Prefer Google's own thumbnail: unlike the original
+                            // it isn't hotlink-protected, so the preview shows the
+                            // real photo instead of a "no permission" placeholder.
+                            src={c.thumbnail || c.url}
                             alt={c.source || "search result"}
                             loading="lazy"
                             // Hide results that won't load in the browser preview

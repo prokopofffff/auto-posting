@@ -1,3 +1,4 @@
+import { decodeEntities } from "./html-entities.ts";
 import type { NewsItem } from "./news-types.ts";
 
 const API = "https://newsapi.org/v2/everything";
@@ -58,9 +59,9 @@ export async function fetchNewsApi(
   return json.articles
     .filter((a) => a.title && a.url)
     .map((a) => ({
-      title: a.title.trim(),
+      title: decodeEntities(a.title),
       url: a.url.trim(),
-      summary: (a.description ?? a.content ?? "").trim().slice(0, 2000),
+      summary: decodeEntities(a.description ?? a.content ?? "").slice(0, 2000),
       source: a.source.name,
       publishedAt: a.publishedAt ? new Date(a.publishedAt) : null,
     }));

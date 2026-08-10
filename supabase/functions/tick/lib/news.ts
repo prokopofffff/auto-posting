@@ -12,6 +12,7 @@ import { fetchNewsApi, isNewsApiConfigured } from "./newsapi.ts";
 import { buildFactCheck, keywords, keywordSetOf, sameStorySets } from "./fact-check.ts";
 import { domainOf, isHighTrust } from "./source-trust.ts";
 import { scoreCandidates } from "./claude.ts";
+import { decodeEntities } from "./html-entities.ts";
 import type { ResolvedModel } from "./ai-credentials.ts";
 import type { NewsItem, VerifiedArticle } from "./news-types.ts";
 
@@ -44,17 +45,6 @@ type ParsedItem = {
 };
 
 type ParsedFeed = { title: string | null; items: ParsedItem[] };
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#0?39;|&apos;/g, "'")
-    .replace(/&amp;/g, "&")
-    .trim();
-}
 
 function stripTags(s: string): string {
   return decodeEntities(s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "));

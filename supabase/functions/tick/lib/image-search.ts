@@ -27,11 +27,82 @@ const EXT_BY_TYPE: Record<string, string> = {
   "image/gif": "gif",
 };
 
-/** One Google Images hit: the image plus where it came from (for display). */
-export type ImageCandidate = { url: string; sourcePage: string; source: string };
+/**
+ * One Google Images hit. `url` is the full-resolution image on the publisher's
+ * own server; `thumbnail` is Google's own copy (gstatic URL or embedded data:
+ * URI) which — unlike the original — is never hotlink-protected, so it's a safe
+ * preview image and a reliable re-host fallback.
+ */
+export type ImageCandidate = {
+  url: string;
+  thumbnail?: string;
+  sourcePage: string;
+  source: string;
+};
 
-// The fields we read off a parsed Bright Data Google-Images result.
-type SerpImage = { original_image?: string; link?: string; title?: string };
+// The fields we read off a parsed Bright Data Google-Images result. The
+// thumbnail lives under one of a few keys depending on Bright Data's parser
+// version, so we read them all defensively.
+type SerpImage = {
+  original_image?: string;
+  image?: string;
+  thumbnail?: string;
+  src?: string;
+  link?: string;
+  title?: string;
+};
+
+/** Pick a usable thumbnail (http(s) URL or data: URI) from a SERP hit, if any. */
+function pickThumbnail(im: SerpImage): string | undefined {
+  for (const v of [im.thumbnail, im.image, im.src]) {
+    if (typeof v === "string" && (v.startsWith("http") || v.startsWith("data:"))) {
+      return v;
+    }
+  }
+  return undefined;
+}
+
+// A desktop-Chrome UA plus a Referer make our download look like an in-page
+// image load, which is what defeats most hotlink protection. Without them,
+// many publishers return a 200-OK "no permission to serve this content"
+// placeholder image instead of the real photo — which then gets re-hosted and
+// shown as the post pic.
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
+function browserHeaders(referer: string): Record<string, string> {
+  const h: Record<string, string> = {
+    "user-agent": BROWSER_UA,
+    accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+  };
+  // A referer from the article's own site is what a real page load would send;
+  // fall back to the image's own origin when we have no source page.
+  try {
+    h.referer = new URL(referer).toString();
+  } catch {
+    /* no usable referer — send none */
+  }
+  return h;
+}
+
+/** Decode a `data:` URI (Bright Data's embedded thumbnail) into image bytes. */
+function decodeDataUri(uri: string): { bytes: Uint8Array; ext: string; contentType: string } | null {
+  const m = uri.match(/^data:([^;,]+)[^,]*;base64,(.*)$/);
+  if (!m) return null;
+  const ctype = m[1].trim().toLowerCase();
+  const ext = EXT_BY_TYPE[ctype];
+  if (!ext) return null;
+  try {
+    const bin = atob(m[2]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMAGE_BYTES) return null;
+    return { bytes, ext, contentType: ctype === "image/jpg" ? "image/jpeg" : ctype };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Search Google Images for `query` via Bright Data and return up to `limit`
@@ -67,7 +138,12 @@ export async function searchImages(query: string, limit = 10): Promise<ImageCand
     for (const im of images) {
       const u = im.original_image;
       if (typeof u === "string" && u.startsWith("http")) {
-        out.push({ url: u, sourcePage: im.link ?? "", source: im.title ?? "" });
+        out.push({
+          url: u,
+          thumbnail: pickThumbnail(im),
+          sourcePage: im.link ?? "",
+          source: im.title ?? "",
+        });
       }
       if (out.length >= limit) break;
     }
@@ -77,38 +153,61 @@ export async function searchImages(query: string, limit = 10): Promise<ImageCand
   }
 }
 
-/**
- * Download `srcUrl` and re-host it in the public `post-images` bucket under
- * `projectId`, returning the stable public URL — or null when the fetch, type,
- * or upload fails (so the caller can try the next candidate). Validates the
- * content type and size the same way manual uploads are validated.
- */
-export async function rehostImage(projectId: string, srcUrl: string): Promise<string | null> {
+/** Fetch `srcUrl` (http(s) or data:) as validated image bytes, or null. */
+async function fetchImageBytes(
+  srcUrl: string,
+  referer: string,
+): Promise<{ bytes: Uint8Array; ext: string; contentType: string } | null> {
+  if (srcUrl.startsWith("data:")) return decodeDataUri(srcUrl);
   try {
-    const res = await fetch(srcUrl, { signal: AbortSignal.timeout(20_000) });
+    const res = await fetch(srcUrl, {
+      headers: browserHeaders(referer || srcUrl),
+      redirect: "follow",
+      signal: AbortSignal.timeout(20_000),
+    });
     if (!res.ok) return null;
     const ctype = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
     const ext = EXT_BY_TYPE[ctype];
     if (!ext) return null;
     const bytes = new Uint8Array(await res.arrayBuffer());
     if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMAGE_BYTES) return null;
-    const path = `${projectId}/${crypto.randomUUID()}.${ext}`;
-    const contentType = ctype === "image/jpg" ? "image/jpeg" : ctype;
-    const up = await supabaseAdmin.storage
-      .from(BUCKET)
-      .upload(path, bytes, { contentType, upsert: false });
-    if (up.error) return null;
-    const { data } = supabaseAdmin.storage.from(BUCKET).getPublicUrl(path);
-    return data.publicUrl;
+    return { bytes, ext, contentType: ctype === "image/jpg" ? "image/jpeg" : ctype };
   } catch {
     return null;
   }
 }
 
 /**
+ * Download `srcUrl` and re-host it in the public `post-images` bucket under
+ * `projectId`, returning the stable public URL — or null when the fetch, type,
+ * or upload fails (so the caller can try the next candidate). `referer` is the
+ * article's source page; sending it (plus a browser UA) stops hotlink-protected
+ * hosts from handing us a placeholder. Validates content type and size the same
+ * way manual uploads are validated.
+ */
+export async function rehostImage(
+  projectId: string,
+  srcUrl: string,
+  referer = "",
+): Promise<string | null> {
+  const fetched = await fetchImageBytes(srcUrl, referer);
+  if (!fetched) return null;
+  const path = `${projectId}/${crypto.randomUUID()}.${fetched.ext}`;
+  const up = await supabaseAdmin.storage
+    .from(BUCKET)
+    .upload(path, fetched.bytes, { contentType: fetched.contentType, upsert: false });
+  if (up.error) return null;
+  const { data } = supabaseAdmin.storage.from(BUCKET).getPublicUrl(path);
+  return data.publicUrl;
+}
+
+/**
  * Search Google Images for `query` and re-host the first result that downloads
  * cleanly, returning its public URL. Used by the unattended pipeline, where no
- * human is present to choose. null when the search or every re-host fails.
+ * human is present to choose. For each hit we try the full-resolution original
+ * first (best quality), then fall back to Google's own thumbnail (never
+ * hotlink-protected) so a blocked host doesn't cost us the photo entirely. null
+ * when the search or every re-host fails.
  */
 export async function searchAndRehostFirst(
   projectId: string,
@@ -116,7 +215,9 @@ export async function searchAndRehostFirst(
 ): Promise<string | null> {
   const candidates = await searchImages(query, 8);
   for (const c of candidates) {
-    const url = await rehostImage(projectId, c.url);
+    const url =
+      (await rehostImage(projectId, c.url, c.sourcePage)) ??
+      (c.thumbnail ? await rehostImage(projectId, c.thumbnail, c.sourcePage) : null);
     if (url) return url;
   }
   return null;
