@@ -12,10 +12,17 @@
 // NOTE: Google Images returns arbitrary third-party images; ensuring the project
 // has the right to reuse a given result is the operator's responsibility.
 import { supabaseAdmin } from "./supabase.ts";
+import { isKnownPlaceholderImage, looksDegraded } from "./image-quality.ts";
 
 const ENDPOINT = "https://api.brightdata.com/request";
 const DEFAULT_ZONE = "autopost_images";
 const BUCKET = "post-images";
+// How many times to ask Bright Data for the same query before giving up. About
+// a third of requests come back as an SEO-spam result set and another sixth
+// aren't parseable JSON at all (measured 2026-08-24); both are per-request
+// flukes that a resample clears, so three attempts land a usable set most of
+// the time. Failing to [] is fine — the draft just stays text-only.
+const SERP_ATTEMPTS = 3;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8MB, mirrors the manual-upload cap
 // Content types we'll re-host, and the extension to store them under. Mirrors
 // the manual-upload allowlist; `image/jpg` is a common non-standard alias.
@@ -105,22 +112,21 @@ function decodeDataUri(uri: string): { bytes: Uint8Array; ext: string; contentTy
 }
 
 /**
- * Search Google Images for `query` via Bright Data and return up to `limit`
- * candidates (full-resolution image URLs + their source). Empty array when
- * credentials are unset, the query is blank, or the request fails.
+ * One Bright Data call: the parsed Google-Images result set, or null when the
+ * request or the parse failed (both are worth retrying).
  *
  * We use Google's modern image-search param `udm=2`. The legacy `tbm=isch`
  * page no longer renders the layout Bright Data waits for, so it stalls ~90s
  * and returns a 502 — which is what caused text-only posts and the "Find
  * images" gateway timeouts. `num` isn't accepted for image search, so the
- * upstream page is always full-size; we cap the results here with `limit`.
+ * upstream page is always full-size; the caller caps the results.
  */
-export async function searchImages(query: string, limit = 10): Promise<ImageCandidate[]> {
-  const token = Deno.env.get("BRIGHTDATA_API_TOKEN")?.trim();
-  const q = query.trim();
-  if (!token || !q) return [];
-  const zone = Deno.env.get("BRIGHTDATA_SERP_ZONE")?.trim() || DEFAULT_ZONE;
-  const target = `https://www.google.com/search?q=${encodeURIComponent(q)}&udm=2`;
+async function fetchSerpImages(
+  token: string,
+  zone: string,
+  query: string,
+): Promise<SerpImage[] | null> {
+  const target = `https://www.google.com/search?q=${encodeURIComponent(query)}&udm=2`;
   try {
     const res = await fetch(ENDPOINT, {
       method: "POST",
@@ -128,29 +134,66 @@ export async function searchImages(query: string, limit = 10): Promise<ImageCand
       body: JSON.stringify({ zone, url: target, format: "json", data_format: "parsed" }),
       signal: AbortSignal.timeout(60_000),
     });
-    if (!res.ok) return [];
+    if (!res.ok) return null;
     // The /request envelope is { status_code, headers, body }; `body` is the
-    // parsed SERP result as a JSON *string* (occasionally already an object).
+    // parsed SERP result as a JSON *string* (occasionally already an object,
+    // and sometimes not JSON at all — hence the catch).
     const env = (await res.json()) as { body?: unknown };
     const body = typeof env.body === "string" ? JSON.parse(env.body) : env.body;
-    const images = ((body as { images?: SerpImage[] } | null)?.images) ?? [];
+    return ((body as { images?: SerpImage[] } | null)?.images) ?? [];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Search Google Images for `query` via Bright Data and return up to `limit`
+ * distinct candidates (full-resolution image URLs + their source). Empty array
+ * when credentials are unset, the query is blank, or every attempt failed.
+ *
+ * Bright Data hands back an SEO-spam result set instead of real results often
+ * enough that taking the first response on faith is how the pipeline ended up
+ * attaching a "this site does not have permission…" card to every post. So we
+ * resample until a set passes `looksDegraded`, and return nothing rather than
+ * publish from a set that never does.
+ */
+export async function searchImages(
+  query: string,
+  limit = 10,
+  attempts = SERP_ATTEMPTS,
+): Promise<ImageCandidate[]> {
+  const token = Deno.env.get("BRIGHTDATA_API_TOKEN")?.trim();
+  const q = query.trim();
+  if (!token || !q) return [];
+  const zone = Deno.env.get("BRIGHTDATA_SERP_ZONE")?.trim() || DEFAULT_ZONE;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const images = await fetchSerpImages(token, zone, q);
+    if (!images) continue;
+    const urls = images
+      .map((im) => im.original_image)
+      .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
+    if (looksDegraded(urls)) continue;
+
+    // Spam sets repeat the same URL many times over; dedupe so a bad set can't
+    // burn all `limit` slots on one image even if it slipped past the check.
+    const seen = new Set<string>();
     const out: ImageCandidate[] = [];
     for (const im of images) {
       const u = im.original_image;
-      if (typeof u === "string" && u.startsWith("http")) {
-        out.push({
-          url: u,
-          thumbnail: pickThumbnail(im),
-          sourcePage: im.link ?? "",
-          source: im.title ?? "",
-        });
-      }
+      if (typeof u !== "string" || !u.startsWith("http") || seen.has(u)) continue;
+      seen.add(u);
+      out.push({
+        url: u,
+        thumbnail: pickThumbnail(im),
+        sourcePage: im.link ?? "",
+        source: im.title ?? "",
+      });
       if (out.length >= limit) break;
     }
-    return out;
-  } catch {
-    return [];
+    if (out.length > 0) return out;
   }
+  return [];
 }
 
 /** Fetch `srcUrl` (http(s) or data:) as validated image bytes, or null. */
@@ -192,6 +235,10 @@ export async function rehostImage(
 ): Promise<string | null> {
   const fetched = await fetchImageBytes(srcUrl, referer);
   if (!fetched) return null;
+  // Google indexes "you may not use this image" cards like any other picture,
+  // so a result can look perfect — 200, image/jpeg, matching thumbnail — and
+  // still be a refusal notice. The bytes are the only tell.
+  if (await isKnownPlaceholderImage(fetched.bytes)) return null;
   const path = `${projectId}/${crypto.randomUUID()}.${fetched.ext}`;
   const up = await supabaseAdmin.storage
     .from(BUCKET)
@@ -204,10 +251,13 @@ export async function rehostImage(
 /**
  * Search Google Images for `query` and re-host the first result that downloads
  * cleanly, returning its public URL. Used by the unattended pipeline, where no
- * human is present to choose. For each hit we try the full-resolution original
- * first (best quality), then fall back to Google's own thumbnail (never
- * hotlink-protected) so a blocked host doesn't cost us the photo entirely. null
- * when the search or every re-host fails.
+ * human is present to choose. null when the search or every re-host fails.
+ *
+ * Two passes, in quality order: every candidate's full-resolution original
+ * first, and only if none of them survive, Google's own thumbnails (never
+ * hotlink-protected, but a few hundred pixels wide). Interleaving the two would
+ * settle for the first hit's thumbnail while a full-size photo was still
+ * available one result down.
  */
 export async function searchAndRehostFirst(
   projectId: string,
@@ -215,9 +265,12 @@ export async function searchAndRehostFirst(
 ): Promise<string | null> {
   const candidates = await searchImages(query, 8);
   for (const c of candidates) {
-    const url =
-      (await rehostImage(projectId, c.url, c.sourcePage)) ??
-      (c.thumbnail ? await rehostImage(projectId, c.thumbnail, c.sourcePage) : null);
+    const url = await rehostImage(projectId, c.url, c.sourcePage);
+    if (url) return url;
+  }
+  for (const c of candidates) {
+    if (!c.thumbnail) continue;
+    const url = await rehostImage(projectId, c.thumbnail, c.sourcePage);
     if (url) return url;
   }
   return null;

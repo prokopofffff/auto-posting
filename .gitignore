@@ -50,3 +50,8 @@ next-env.d.ts
 
 # Local Netlify folder
 .netlify
+
+# Written when the edge function's Deno checks/tests run locally or in CI.
+# Supabase resolves the function's dependencies at deploy time, so pinning them
+# here would only risk the lock and the deployed runtime drifting apart.
+deno.lock
