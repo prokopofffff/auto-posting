@@ -6,6 +6,7 @@ import { publishDraft } from "@/server/publish";
 import { regenerateDraft, runPipelineForProject } from "@/server/pipeline";
 import { invokeEdge } from "@/server/edge";
 import { uploadProjectImage } from "@/lib/upload-image";
+import { isKnownPlaceholderImage } from "@/lib/image-quality";
 import type { ImageCandidate, Platform } from "@/lib/types";
 
 async function assertDraftOwnership(draftId: string) {
@@ -151,13 +152,16 @@ async function downloadImageFile(srcUrl: string, referer?: string): Promise<File
         };
     const res = await fetch(srcUrl, { headers, redirect: "follow", signal: AbortSignal.timeout(20_000) });
     if (!res.ok) return null;
-    const blob = await res.blob();
-    if (blob.size === 0) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength === 0) return null;
+    // Search hits include "you may not use this image" cards served as ordinary
+    // 200-OK photos; never let one become a post picture.
+    if (await isKnownPlaceholderImage(bytes)) return null;
     // Some hosts send "image/jpg" or no type; normalize so the uploader accepts
     // it, inferring jpeg as a last resort (the uploader re-validates the type).
-    const raw = (res.headers.get("content-type") || blob.type || "").split(";")[0].trim().toLowerCase();
+    const raw = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
     const type = raw === "image/jpg" || raw === "" ? "image/jpeg" : raw;
-    return new File([blob], "search-image", { type });
+    return new File([bytes], "search-image", { type });
   } catch {
     return null;
   }

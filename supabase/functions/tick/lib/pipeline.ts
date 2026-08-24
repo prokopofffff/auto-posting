@@ -384,7 +384,10 @@ export async function pickDraftPhoto(
   const query = draft.imageQuery || draft.topic || draft.topics?.[0] || "";
   if (!query) return { ok: false, error: "Draft has no topic to search on." };
 
-  const candidates = await searchImages(query);
+  // Two resamples, not the pipeline's three: someone is watching a spinner and
+  // the request is on the app's serverless clock. A junk set costs them a
+  // second click; a timeout costs them the feature.
+  const candidates = await searchImages(query, 10, 2);
   return { ok: true, candidates };
 }
 

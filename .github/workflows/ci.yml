@@ -33,6 +33,15 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 
+      # `tsc` doesn't cover supabase/functions (Deno runtime, npm: specifiers),
+      # so the edge function gets its own type check plus its unit tests.
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Typecheck & test edge function
+        run: pnpm test:edge
+
       - name: Build
         run: pnpm build
         env:
